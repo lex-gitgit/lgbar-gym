@@ -104,7 +104,13 @@ Live on PythonAnywhere's free tier (persistent disk — required, since the app 
 - **`frontend/vite.config.js`** — `base: "/static/"` in production builds (so asset URLs resolve under Django's `STATIC_URL`), `base: "/"` in dev.
 - **`helloworld/urls.py`** — a catch-all `re_path` serves `frontend/dist/index.html` for any path not under `api/`, `admin/`, or `static/`, so React Router deep-links survive a page refresh.
 - **`frontend/dist/` is committed** (not gitignored) — the deploy host never runs `npm install`/`npm run build`; you build locally and push the built output. **After any frontend change: `cd frontend && npm run build` before committing**, or the live site serves stale JS/CSS.
-- Deploying an update: push to GitHub, then on the server `git pull && python manage.py migrate && python manage.py collectstatic --noinput`, then **Reload** the web app from the PythonAnywhere Web tab (code changes don't take effect until the process restarts).
+- **Deploying an update — always run all three steps, unconditionally, every time:**
+  ```sh
+  git pull
+  python manage.py migrate
+  python manage.py collectstatic --noinput
+  ```
+  then **Reload** the web app from the PythonAnywhere Web tab. Do not skip `migrate` because "this deploy had no new migrations" or skip `collectstatic` because "this deploy didn't touch the frontend" — both are cheap no-ops when not needed, and guessing wrong is a live-site outage, not a warning. Concretely: Vite content-hashes JS/CSS filenames (`Leaderboard-CRJzeG7D.js` → `Leaderboard-DZHMderD.js` on rebuild); `git pull` updates `index.html` to reference the new hashed filenames immediately, but WhiteNoise only serves what's in `STATIC_ROOT` (`staticfiles/`), which only `collectstatic` refreshes — skip it and every changed page 404s on its own JS until you run it. Also note code changes don't take effect until Reload — a lone `git pull`/`migrate`/`collectstatic` with no Reload leaves the old process running the old Python.
 
 ## Important quirks
 
