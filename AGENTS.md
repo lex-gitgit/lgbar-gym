@@ -106,13 +106,15 @@ Live on PythonAnywhere's free tier (persistent disk — required, since the app 
 - **`frontend/vite.config.js`** — `base: "/static/"` in production builds (so asset URLs resolve under Django's `STATIC_URL`), `base: "/"` in dev.
 - **`helloworld/urls.py`** — a catch-all `re_path` serves `frontend/dist/index.html` for any path not under `api/`, `admin/`, or `static/`, so React Router deep-links survive a page refresh.
 - **`frontend/dist/` is committed** (not gitignored) — the deploy host never runs `npm install`/`npm run build`; you build locally and push the built output. **After any frontend change: `cd frontend && npm run build` before committing**, or the live site serves stale JS/CSS.
-- **Deploying an update — always run all four steps, in order, unconditionally, every time:**
+- **Deploying an update — always run this whole sequence, in order, unconditionally, every time:**
   ```sh
+  workon gymenv
+  cd ~/lgbar-gym
   git pull
   python manage.py migrate
   python manage.py collectstatic --noinput
   ```
-  then **Reload** the web app from the PythonAnywhere Web tab — **Reload is not optional and is not a separate/later step, it is part of the deploy.** Do not skip `migrate` because "this deploy had no new migrations," skip `collectstatic` because "this deploy didn't touch the frontend," or stop after `collectstatic` thinking the job is done — all three CLI commands are cheap no-ops when not needed, but guessing wrong (or forgetting Reload) is a live-site outage, not a warning.
+  then **Reload** the web app from the PythonAnywhere Web tab — **Reload is not optional and is not a separate/later step, it is part of the deploy.** A plain Bash console does **not** auto-activate the virtualenv — skip `workon gymenv` and `migrate`/`collectstatic` either fail outright (`ModuleNotFoundError`) or silently run against the wrong Python. Do not skip `migrate` because "this deploy had no new migrations," skip `collectstatic` because "this deploy didn't touch the frontend," or stop after `collectstatic` thinking the job is done — the CLI commands are cheap no-ops when not needed, but guessing wrong (or forgetting Reload) is a live-site outage, not a warning.
   - Why `collectstatic` matters: Vite content-hashes JS/CSS filenames (`Leaderboard-CRJzeG7D.js` → `Leaderboard-DZHMderD.js` on rebuild). `git pull` updates `index.html` to reference the new hashed filenames immediately, but WhiteNoise only serves what's physically in `STATIC_ROOT` (`staticfiles/`), which only `collectstatic` refreshes.
   - Why Reload matters even after `collectstatic` succeeds: with `DEBUG=False`, WhiteNoise builds its static-file index **once, at process startup** (`WHITENOISE_AUTOREFRESH` defaults to off in production) — it does not notice files `collectstatic` adds to disk while the process is already running. A `collectstatic` run with no Reload afterward leaves the new files on disk but still 404s live, because the running process's in-memory index doesn't know they exist yet. This bit us once already — don't report a deploy as "done" without confirming Reload happened last.
 
