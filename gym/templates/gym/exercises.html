@@ -1,0 +1,48 @@
+{% extends "gym/base.html" %}
+{% block title %}Exercises - Gym Logger{% endblock %}
+{% block content %}
+<div class="flex flex-between mb-md">
+    <h1>Exercise Catalogue</h1>
+    <button class="btn btn-primary" onclick="document.getElementById('addForm').classList.toggle('hidden')">+ Add Exercise</button>
+</div>
+
+<div id="addForm" class="card {% if not form.errors %}hidden{% endif %}" style="display: {% if form.errors %}block{% else %}none{% endif %};">
+    <h2>New Exercise</h2>
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-row">
+            <div class="form-group" style="flex: 3;">
+                <input type="text" name="name" placeholder="Exercise name" required>
+            </div>
+            <div class="form-group">
+                <button type="submit" class="btn btn-primary w-full">Add</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+{% if exercises %}
+<div class="exercise-list">
+    {% for exercise in exercises %}
+    <div class="exercise-chip flex-between" style="gap: 8px;">
+        <span>{{ exercise.name }}</span>
+        <form method="post" action="{% url 'exercise_delete' exercise.id %}" class="inline-form" onsubmit="return confirm('Delete {{ exercise.name }}?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger btn-sm" style="padding: 2px 8px; font-size: 0.8rem;">✕</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No exercises yet. Add your first exercise!</p>
+</div>
+{% endif %}
+
+<script>
+    document.querySelector('#addForm .btn-primary')?.addEventListener('click', function(e) {
+        const input = document.querySelector('#addForm input');
+        if (!input.value.trim()) e.preventDefault();
+    });
+</script>
+{% endblock %}

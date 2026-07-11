@@ -1,0 +1,186 @@
+import { useState, useEffect, useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api } from "../api";
+
+const BODY_PART_LABELS = {
+  chest: "Chest",
+  back: "Back",
+  shoulders: "Shoulders",
+  biceps: "Biceps",
+  triceps: "Triceps",
+  legs: "Legs",
+  core: "Core",
+  cardio: "Cardio",
+};
+
+export default function DayCreate({ showFlash }) {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const [exercises, setExercises] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [presetExercises, setPresetExercises] = useState({});
+  const [selected, setSelected] = useState(new Set());
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [presetId, setPresetId] = useState(searchParams.get("preset") || "");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    if (!search) return exercises;
+    const q = search.toLowerCase();
+    return exercises.filter((ex) => ex.name.toLowerCase().includes(q));
+  }, [exercises, search]);
+
+  const grouped = useMemo(() => {
+    const map = {};
+    for (const ex of filtered) {
+      const key = ex.body_part || "other";
+      if (!map[key]) map[key] = [];
+      map[key].push(ex);
+    }
+    return map;
+  }, [filtered]);
+
+  useEffect(() => {
+    Promise.all([
+      api.get("/exercises/"),
+      api.get("/presets/"),
+    ]).then(([exData, presetData]) => {
+      setExercises(exData);
+      setPresets(presetData);
+      const pe = {};
+      Promise.all(
+        presetData.map((p) =>
+          api.get(`/presets/${p.id}/`).then((d) => {
+            pe[p.id] = d.exercises.map((e) => e.exercise);
+          })
+        )
+      ).then(() => setPresetExercises(pe));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (presetId && presetExercises[presetId]) {
+      setSelected(new Set(presetExercises[presetId]));
+    } else if (!presetId) {
+      setSelected(new Set());
+    }
+  }, [presetId, presetExercises]);
+
+  const toggle = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (selected.size === 0) {
+      showFlash("Please select at least one exercise.", "error");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const data = await api.post("/days/", {
+        date,
+        preset: presetId || null,
+        notes,
+        exercises: Array.from(selected).join(","),
+      });
+      showFlash("Workout logged!");
+      navigate(`/day/${data.id}`);
+    } catch (err) {
+      showFlash(err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="page-header">
+        <h1>Log Workout</h1>
+      </div>
+      <form onSubmit={handleSubmit}>
+        <div className="card">
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="date">Date</label>
+              <input type="date" id="date" value={date} onChange={(e) => setDate(e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label htmlFor="preset">Preset (optional)</label>
+              <select id="preset" value={presetId} onChange={(e) => setPresetId(e.target.value)}>
+                <option value="">— Custom Day —</option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="notes">Notes</label>
+            <textarea id="notes" rows="2" placeholder="Optional notes…" value={notes}
+              onChange={(e) => setNotes(e.target.value)} />
+          </div>
+        </div>
+
+        <button type="submit" className="btn btn-primary w-full" style={{ padding: "14px", marginBottom: 16 }} disabled={submitting}>
+          {submitting ? <><span className="spinner spinner--white" /> Saving…</> : "Start Logging"}
+        </button>
+
+        <div className="card">
+          <h2>Choose Exercises</h2>
+          <div style={{ marginBottom: 12 }}>
+            <input type="text" placeholder="Search exercises…"
+              value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          {Object.keys(grouped).length > 0 ? (
+            Object.entries(grouped).map(([part, exs]) => (
+              <div key={part} style={{ marginBottom: 16 }}>
+                <h3 className="body-part-heading">{BODY_PART_LABELS[part] || part}</h3>
+                <div className="exercise-list">
+                  {exs.map((ex) => (
+                    <div key={ex.id}
+                      className={`exercise-chip ${selected.has(ex.id) ? "selected" : ""}`}
+                      onClick={() => toggle(ex.id)}
+                      role="checkbox"
+                      aria-checked={selected.has(ex.id)}
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(ex.id); } }}
+                    >
+                      <span>{ex.name}</span>
+                      <span className="body-part-badge">{ex.body_part}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-muted">No exercises found{search ? ` matching "${search}"` : ""}.</p>
+          )}
+        </div>
+
+        {selected.size > 0 && (
+          <div className="card">
+            <h2>Selected Exercises</h2>
+            {Array.from(selected).map((id) => {
+              const ex = exercises.find((e) => e.id === id);
+              return (
+                <div className="exercise-chip flex-between mb-md" style={{ marginBottom: "4px" }} key={id}>
+                  <span>{ex ? ex.name : id}</span>
+                  <span className="text-muted" style={{ cursor: "pointer" }} onClick={() => toggle(id)}>✕</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </form>
+    </>
+  );
+}

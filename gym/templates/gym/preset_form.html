@@ -1,0 +1,91 @@
+{% extends "gym/base.html" %}
+{% block title %}{% if preset %}Edit{% else %}New{% endif %} Preset - Gym Logger{% endblock %}
+{% block content %}
+<h1>{% if preset %}Edit{% else %}New{% endif %} Preset</h1>
+
+<form method="post">
+    {% csrf_token %}
+    <div class="card">
+        <div class="form-group">
+            <label for="name">Preset Name</label>
+            <input type="text" name="name" id="name" value="{{ preset.name|default:'' }}" placeholder="e.g. Pull Day" required>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Exercises</h2>
+        <div class="exercise-list" id="exerciseList">
+            {% for exercise in exercises %}
+            <div class="exercise-chip {% if exercise.id in selected %}selected{% endif %}" data-id="{{ exercise.id }}" onclick="toggleExercise(this)">
+                {{ exercise.name }}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div id="selectedContainer" class="card" style="display: {% if selected %}block{% else %}none{% endif %};">
+        <h2>Selected</h2>
+        <div id="selectedExercises">
+            {% for exercise in exercises %}
+            {% if exercise.id in selected %}
+            <div class="exercise-chip flex-between mb-md" style="margin-bottom: 4px;" data-sid="{{ exercise.id }}">
+                <span>{{ exercise.name }}</span>
+                <span class="text-muted" style="cursor:pointer" onclick="toggleExercise(document.querySelector('.exercise-chip[data-id=\\"{{ exercise.id }}\\"]'))">✕</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary w-full" style="padding: 14px;">Save Preset</button>
+</form>
+
+<script>
+    const selected = new Set({{ selected|safe }});
+
+    function toggleExercise(el) {
+        const id = parseInt(el.dataset.id);
+        if (selected.has(id)) {
+            selected.delete(id);
+            el.classList.remove('selected');
+        } else {
+            selected.add(id);
+            el.classList.add('selected');
+        }
+        renderSelected();
+    }
+
+    function renderSelected() {
+        const container = document.getElementById('selectedContainer');
+        const list = document.getElementById('selectedExercises');
+        if (selected.size === 0) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = 'block';
+        list.innerHTML = '';
+        selected.forEach(id => {
+            const chip = document.querySelector(`.exercise-chip[data-id="${id}"]`);
+            const name = chip ? chip.textContent.trim() : id;
+            const div = document.createElement('div');
+            div.className = 'exercise-chip flex-between mb-md';
+            div.style.marginBottom = '4px';
+            div.innerHTML = `<span>${name}</span> <span class="text-muted" style="cursor:pointer" onclick="toggleExercise(document.querySelector('.exercise-chip[data-id=\\"${id}\\"]'))">✕</span>`;
+            list.appendChild(div);
+        });
+    }
+
+    document.querySelector('form').addEventListener('submit', function(e) {
+        if (selected.size === 0) {
+            e.preventDefault();
+            alert('Please select at least one exercise.');
+            return;
+        }
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'exercises';
+        input.value = Array.from(selected).join(',');
+        this.appendChild(input);
+    });
+</script>
+{% endblock %}

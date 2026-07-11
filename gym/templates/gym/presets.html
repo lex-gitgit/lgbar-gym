@@ -1,0 +1,31 @@
+{% extends "gym/base.html" %}
+{% block title %}Presets - Gym Logger{% endblock %}
+{% block content %}
+<div class="flex flex-between mb-md">
+    <h1>Day Presets</h1>
+    <a href="{% url 'preset_create' %}" class="btn btn-primary">+ New Preset</a>
+</div>
+
+{% if presets %}
+<div class="exercise-list" style="grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));">
+    {% for preset in presets %}
+    <a href="{% url 'preset_detail' preset.id %}" style="text-decoration: none; color: inherit;">
+        <div class="card" style="margin-bottom: 0;">
+            <div class="flex-between">
+                <div>
+                    <strong>{{ preset.name }}</strong>
+                    <div class="text-muted" style="margin-top: 4px;">{{ preset.exercises.count }} exercise{{ preset.exercises.count|pluralize }}</div>
+                </div>
+                <span style="color: var(--text-muted); font-size: 1.2rem;">→</span>
+            </div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No presets yet. Create a preset to quickly log common workouts!</p>
+    <a href="{% url 'preset_create' %}" class="btn btn-primary mt-md">Create Preset</a>
+</div>
+{% endif %}
+{% endblock %}
