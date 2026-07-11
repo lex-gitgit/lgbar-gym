@@ -3,6 +3,8 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
+import requests
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.db import transaction
@@ -488,6 +490,128 @@ def chat_list_create(request):
     else:
         messages = list(reversed(qs.order_by("-id")[:50]))
     return Response(ChatMessageSerializer(messages, many=True).data)
+
+
+# --- Coach (AI fitness chatbot, via OpenRouter) ---
+
+COACH_MAX_HISTORY = 20
+COACH_MAX_MESSAGE_LEN = 2000
+COACH_VALID_ROLES = {"user", "assistant"}
+
+COACH_SYSTEM_PROMPT = """You are "Coach", a blunt, impatient, no-nonsense gym coach built into a workout-tracking app. You are talking to {username}.
+
+Personality:
+- You're condescending and a little bitchy about it — you think the user should be working out right now instead of chatting with you. Needle them about slacking off, use mild profanity (damn, hell, ass — nothing worse), and keep a "why are you still talking to me, go lift" energy.
+- Despite the attitude, you ALWAYS give genuinely correct, safe, and useful fitness/exercise/nutrition advice when asked. The bad attitude is a delivery style, not an excuse to be unhelpful or wrong.
+- Keep replies short — 2 to 4 sentences, like someone who has better things to do than write essays.
+- Never give real medical diagnoses or claim to replace a doctor/physical therapist; for injury/pain questions, tell them to see a professional (bitchily) and give general safe guidance only.
+- If the user's question has nothing to do with fitness, gym, exercise, or nutrition, roast them for wasting your time and redirect them back to their workout.
+
+Here's what you actually know about {username}'s training, so use it to call them out specifically when relevant:
+{workout_summary}
+"""
+
+
+def _coach_workout_summary(user):
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    week_count = WorkoutDay.objects.filter(user=user, date__gte=week_start).count()
+
+    recent_days = list(
+        WorkoutDay.objects.filter(user=user)
+        .select_related("preset")
+        .prefetch_related("exercises__exercise")[:3]
+    )
+    if not recent_days:
+        return "This user has never logged a single workout. They have no excuse."
+
+    days_since = (today - recent_days[0].date).days
+    if days_since <= 0:
+        last_line = "Last workout: today."
+    elif days_since == 1:
+        last_line = "Last workout: yesterday."
+    else:
+        last_line = f"Last workout: {days_since} days ago ({recent_days[0].date.isoformat()})."
+
+    lines = [f"Workouts logged this week (since Monday): {week_count}.", last_line, "Recent workouts:"]
+    for day in recent_days:
+        label = day.preset.name if day.preset else "Custom"
+        exercise_names = ", ".join(we.exercise.name for we in day.exercises.all())
+        lines.append(f"- {day.date.isoformat()} ({label}): {exercise_names or 'no exercises logged'}")
+
+    return "\n".join(lines)
+
+
+@api_view(["POST"])
+def coach_chat(request):
+    if not settings.OPENROUTER_API_KEY:
+        return Response(
+            {"error": "Coach isn't configured on this server."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    raw_messages = request.data.get("messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        return Response(
+            {"error": "messages must be a non-empty list."}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    cleaned = []
+    for m in raw_messages[-COACH_MAX_HISTORY:]:
+        if not isinstance(m, dict):
+            return Response({"error": "Invalid message format."}, status=status.HTTP_400_BAD_REQUEST)
+        role = m.get("role")
+        content = str(m.get("content", "")).strip()
+        if role not in COACH_VALID_ROLES or not content:
+            return Response({"error": "Invalid message format."}, status=status.HTTP_400_BAD_REQUEST)
+        cleaned.append({"role": role, "content": content[:COACH_MAX_MESSAGE_LEN]})
+
+    system_prompt = COACH_SYSTEM_PROMPT.format(
+        username=request.user.username,
+        workout_summary=_coach_workout_summary(request.user),
+    )
+
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+                "X-Title": "BIG MACS Coach",
+            },
+            json={
+                "model": settings.OPENROUTER_MODEL,
+                "messages": [{"role": "system", "content": system_prompt}] + cleaned,
+                "max_tokens": 500,
+            },
+            timeout=30,
+        )
+    except requests.RequestException:
+        return Response(
+            {"error": "Coach couldn't be reached. Try again in a bit."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    if resp.status_code == 429:
+        return Response(
+            {"error": "Coach is busy. Do another set and ask again."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    if not resp.ok:
+        return Response(
+            {"error": "Coach couldn't be reached. Try again in a bit."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    try:
+        reply = resp.json()["choices"][0]["message"]["content"].strip()
+    except (ValueError, KeyError, IndexError, TypeError):
+        return Response(
+            {"error": "Coach couldn't be reached. Try again in a bit."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return Response({"reply": reply})
 
 
 def get_object_or_404(model, **kwargs):

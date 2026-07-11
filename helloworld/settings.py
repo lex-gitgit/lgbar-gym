@@ -35,6 +35,13 @@ DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 # "yourname.pythonanywhere.com". Defaults to localhost for dev.
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
+# OpenRouter key for the "Coach" chatbot (gym/api_views.py::coach_chat). Never
+# sent to the frontend — the backend proxies the OpenRouter call. Empty by
+# default so a missing key degrades to a 503 on /api/coach/ rather than
+# crashing the app.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+
 
 # Application definition
 

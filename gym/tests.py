@@ -1,9 +1,10 @@
 import json
 from datetime import date, timedelta
+from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -178,6 +179,7 @@ class AuthGatingTests(ApiTestCase):
             ("get", reverse("api_leaderboard")),
             ("get", reverse("api_leaderboard_exercise", args=[self.ex.id])),
             ("get", reverse("api_chat")),
+            ("post", reverse("api_coach")),
         ]
         for method, url in endpoints:
             res = getattr(self.client, method)(url)
@@ -770,3 +772,96 @@ class ChatApiTests(ApiTestCase):
         res = self.client.get(reverse("api_chat"))
         texts = [m["text"] for m in res.json()]
         self.assertIn("from bob", texts)
+
+
+# --- Coach ---
+
+def _mock_openrouter_response(reply="Get back to your set.", status_code=200):
+    mock_resp = Mock()
+    mock_resp.status_code = status_code
+    mock_resp.ok = 200 <= status_code < 300
+    mock_resp.json.return_value = {"choices": [{"message": {"content": reply}}]}
+    return mock_resp
+
+
+@override_settings(OPENROUTER_API_KEY="test-key", OPENROUTER_MODEL="google/gemma-4-31b-it:free")
+class CoachApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login_as(self.alice)
+
+    @patch("gym.api_views.requests.post")
+    def test_happy_path_returns_reply(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response("Nice work, now go do another set.")
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "how many sets?"}]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["reply"], "Nice work, now go do another set.")
+
+    @patch("gym.api_views.requests.post")
+    def test_system_prompt_includes_username_and_workout_facts(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        day = self.make_day(self.alice, day_date=date.today())
+        WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+
+        self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        system_msg = sent_payload["messages"][0]
+        self.assertEqual(system_msg["role"], "system")
+        self.assertIn("alice", system_msg["content"])
+        self.assertIn(self.ex.name, system_msg["content"])
+        self.assertEqual(sent_payload["model"], "google/gemma-4-31b-it:free")
+
+    @patch("gym.api_views.requests.post")
+    def test_history_truncated_to_20_messages(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        history = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+        self.post_json(reverse("api_coach"), {"messages": history})
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        # 1 system message + last 20 of the 30 sent
+        self.assertEqual(len(sent_payload["messages"]), 21)
+        self.assertEqual(sent_payload["messages"][1]["content"], "msg 10")
+        self.assertEqual(sent_payload["messages"][-1]["content"], "msg 29")
+
+    def test_missing_messages_rejected(self):
+        res = self.post_json(reverse("api_coach"), {})
+        self.assertEqual(res.status_code, 400)
+
+    def test_messages_not_a_list_rejected(self):
+        res = self.post_json(reverse("api_coach"), {"messages": "not a list"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_bad_role_rejected(self):
+        res = self.post_json(
+            reverse("api_coach"), {"messages": [{"role": "system", "content": "sneaky"}]}
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_empty_content_rejected(self):
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "   "}]})
+        self.assertEqual(res.status_code, 400)
+
+    @override_settings(OPENROUTER_API_KEY="")
+    def test_missing_api_key_returns_503(self):
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(res.status_code, 503)
+
+    @patch("gym.api_views.requests.post")
+    def test_openrouter_rate_limit_returns_429(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response(status_code=429)
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(res.status_code, 429)
+
+    @patch("gym.api_views.requests.post")
+    def test_openrouter_server_error_returns_502(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response(status_code=500)
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(res.status_code, 502)
+
+    @patch("gym.api_views.requests.post")
+    def test_openrouter_network_error_returns_502(self, mock_post):
+        import requests as requests_module
+        mock_post.side_effect = requests_module.ConnectionError("boom")
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(res.status_code, 502)

@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar";
 
 import MobileTopBar from "./components/MobileTopBar";
 import FlashMessages from "./components/FlashMessages";
+import CoachWidget from "./components/CoachWidget";
 
 api.initCsrf();
 
@@ -76,6 +77,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     try { await api.post("/logout/"); } catch {}
     setUser(null);
+    sessionStorage.removeItem("coach_chat");
   }, []);
 
   if (loading) return null;
@@ -118,6 +120,7 @@ export default function App() {
           </div>
         </Suspense>
       </main>
+      <CoachWidget user={user} />
       {flash && <FlashMessages message={flash.message} type={flash.type} />}
     </div>
   );

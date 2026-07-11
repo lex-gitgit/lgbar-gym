@@ -22,4 +22,5 @@ urlpatterns = [
     path("api/leaderboard/", api_views.leaderboard, name="api_leaderboard"),
     path("api/leaderboard/exercise/<int:exercise_id>/", api_views.leaderboard_exercise, name="api_leaderboard_exercise"),
     path("api/chat/", api_views.chat_list_create, name="api_chat"),
+    path("api/coach/", api_views.coach_chat, name="api_coach"),
 ]

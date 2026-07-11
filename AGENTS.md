@@ -6,7 +6,7 @@ A private, login-gated gym-tracking app for a small friend group (~4-6 people, n
 ```sh
 # Backend (Django) — from repo root
 python manage.py runserver         # dev server on :8000
-python manage.py test gym          # run all 70 tests
+python manage.py test gym          # run all 88 tests
 python manage.py test gym.tests.YourTestClass   # single test class
 
 # Frontend (React + Vite) — in another terminal
@@ -38,7 +38,7 @@ Two-tier app, single-origin in production: Django REST backend + React SPA, sess
 
 **Frontend** (`frontend/src/`):
 - Pages (`src/pages/`): Login, Dashboard, Exercises, DayCreate, DayDetail, PresetForm, PresetDetail, Leaderboard, Chat.
-- Components (`src/components/`): Sidebar, MobileTopBar, FlashMessages, Navbar.
+- Components (`src/components/`): Sidebar, MobileTopBar, FlashMessages, Navbar, CoachWidget.
 - `api.js` — single fetch wrapper for all API calls (JSON body, CSRF header from cookie, redirects to `/` on 401/403 — except `/me/`, whose failure is handled locally by `App.jsx`'s own auth check, to avoid a reload loop for logged-out visitors).
 - `index.css` — all styles; dark/light theme via `data-theme` attribute + `localStorage`. No CSS framework/modules — reuse existing classes (`.card`, `.analytics-pr-list`/`.analytics-pr-row`, `.page-header`, `.tabs`/`.tab`, `.empty-state`, `.btn*`) before inventing new ones.
 - Most routes render inside `.main-content-inner` (centered, `max-width: 860px`, padded). A route can opt into `.main-content-full` instead — edge-to-edge, viewport-height flex column, no page-level scroll — for an immersive layout; the choice is a `location.pathname` check in `App.jsx`. Currently only `/chat` uses it.
@@ -72,6 +72,7 @@ Two-tier app, single-origin in production: Django REST backend + React SPA, sess
 | GET    | `/api/leaderboard/` | See "Leaderboard" below |
 | GET    | `/api/leaderboard/exercise/<exercise_id>/` | Per-exercise PR ranking; 404 if the exercise doesn't exist |
 | GET/POST | `/api/chat/` | See "Chat" below |
+| POST   | `/api/coach/` | See "Coach" below |
 
 ## Leaderboard
 
@@ -88,6 +89,17 @@ Superusers and inactive users are excluded from all boards. Frontend (`Leaderboa
 
 Single shared room (not per-DM), polling-based — deliberately not WebSockets/Django Channels, which would be disproportionate infra for ~6 users. `ChatMessage.Meta.ordering = ["id"]` (auto-increment doubles as chronological order, immune to clock skew). Protocol: `GET /api/chat/` with no params returns the latest 50 (ascending); `GET /api/chat/?after=<id>` returns everything with `id > after`, capped at 200. `Chat.jsx` polls every 5s via `setInterval` (cleaned up on unmount — required, since React 18 StrictMode double-mounts effects in dev) and dedupes incoming messages by id (a poll and the sender's own POST response can otherwise double-deliver one message).
 
+## Coach
+
+An AI fitness-advice chatbot, exposed as a floating launcher (bottom-right, `CoachWidget.jsx`) on every page except `/chat`. Backend is a **stateless proxy** — `coach_chat` in `api_views.py` never touches the database beyond reading existing `WorkoutDay`/`WorkoutExercise` rows for context:
+
+- `POST /api/coach/` takes `{"messages": [{"role": "user"|"assistant", "content": str}, ...]}` (the client's whole visible conversation), truncates to the last `COACH_MAX_HISTORY = 20` and each message to `COACH_MAX_MESSAGE_LEN = 2000` chars server-side (never trust the client for bounds), prepends a system prompt built by `_coach_workout_summary(user)` (this week's workout count, days since last workout, last 3 workouts with preset + exercise names), and proxies to OpenRouter's `/chat/completions` with `requests`. Returns `{"reply": str}`.
+- **Model/key**: `OPENROUTER_MODEL` (default `google/gemma-4-31b-it:free`) and `OPENROUTER_API_KEY`, both env vars read in `settings.py`. If the key isn't set, the endpoint returns 503 rather than crashing — the rest of the app is unaffected either way.
+- **Persona**: "Coach" is deliberately condescending/impatient (mild profanity, "go do your set" energy) but the system prompt explicitly requires genuinely correct, safe fitness advice underneath the attitude — the tone is a delivery style, not license to be wrong or unhelpful. Edit `COACH_SYSTEM_PROMPT` in `api_views.py` to adjust.
+- **Storage**: zero. The conversation lives only in the browser tab (`sessionStorage` key `coach_chat`, capped at the same 20-message window), cleared by the widget's reset button, by logout (`App.jsx::handleLogout`), or simply by closing the tab. Nothing is persisted server-side — there's nothing to prune.
+- **Errors are pre-written in character** so the widget doesn't need special-case UI: 400 (bad request shape), 429 ("Coach is busy..." — OpenRouter's free-tier models are rate-limited, expect this under load from ~6 concurrent users), 502 (OpenRouter unreachable/erroring), 503 (key not configured).
+- `CoachApiTests` in `gym/tests.py` mocks `requests.post` (`@patch("gym.api_views.requests.post")`) — never hits the real OpenRouter API in tests.
+
 ## Backups
 
 ```sh
@@ -101,8 +113,8 @@ Snapshots the live SQLite DB into `backups/` (gitignored — contains real user 
 
 Live on PythonAnywhere's free tier (persistent disk — required, since the app uses SQLite as a single on-disk file; ephemeral-filesystem PaaS free tiers, e.g. Render/Railway/Fly without a paid volume, would wipe the DB on every redeploy). Single-origin: Django serves the API **and** the built React app.
 
-- **`requirements.txt`** — pinned deps including `whitenoise` (serves `frontend/dist` static assets) and `gunicorn` (not used by PythonAnywhere's WSGI setup, but present for portability to a VPS).
-- **`helloworld/settings.py`** — `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS` all read from env vars with dev-safe defaults (see `.env.example`). When `DEBUG=False`, secure cookie flags and `SECURE_PROXY_SSL_HEADER` kick in automatically.
+- **`requirements.txt`** — pinned deps including `whitenoise` (serves `frontend/dist` static assets), `gunicorn` (not used by PythonAnywhere's WSGI setup, but present for portability to a VPS), and `requests` (OpenRouter calls for Coach). A `pip install -r requirements.txt` inside the venv is needed the first time a new dependency lands — the standard 4-step deploy below doesn't do this for you.
+- **`helloworld/settings.py`** — `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` all read from env vars with dev-safe defaults (see `.env.example`). When `DEBUG=False`, secure cookie flags and `SECURE_PROXY_SSL_HEADER` kick in automatically. `OPENROUTER_API_KEY` has no default — it must be set on the host (PythonAnywhere: in the WSGI config file on the Web tab, same place as the others) or Coach degrades to a 503, harmlessly.
 - **`frontend/vite.config.js`** — `base: "/static/"` in production builds (so asset URLs resolve under Django's `STATIC_URL`), `base: "/"` in dev.
 - **`helloworld/urls.py`** — a catch-all `re_path` serves `frontend/dist/index.html` for any path not under `api/`, `admin/`, or `static/`, so React Router deep-links survive a page refresh.
 - **`frontend/dist/` is committed** (not gitignored) — the deploy host never runs `npm install`/`npm run build`; you build locally and push the built output. **After any frontend change: `cd frontend && npm run build` before committing**, or the live site serves stale JS/CSS.
@@ -123,7 +135,7 @@ Live on PythonAnywhere's free tier (persistent disk — required, since the app 
 - **`0 or -1` bug, fixed**: `aggregate(...)["order__max"] or -1` treats order `0` as falsy. `day_add_exercise` uses an explicit `is None` check; `set_add`'s `or 0` pattern is safe only because `set_number` starts at 1. Keep this in mind for any new "next sequence number" logic.
 - **WAL mode is on** (`gym/apps.py`) — smooths concurrent reads (chat polling) against writes. Produces `db.sqlite3-wal`/`-shm` sidecar files (gitignored); harmless, no action needed.
 - **Seed data**: migration `0002_seed_data` creates 36 exercises + the `user`/`1234` account; `0003`/`0004` add body-part categorization. Exercise names like "Bench Press" collide with what a naive test fixture might pick — **use `ZZ`-prefixed names in tests** (see `EX_ALPHA` etc. in `gym/tests.py`).
-- **Tests are API-only now** (`gym/tests.py`, 77 tests) — the old 83 tests against template views were deleted along with `gym/views.py`. Structure: `ApiTestCase` base with `alice`/`bob` fixtures + helpers (`login_as`, `post_json`, `put_json`, `make_day`, `make_preset`), then per-feature classes (`AuthApiTests`, `AuthGatingTests`, `ExerciseApiTests`, `WorkoutDayApiTests`, `UserScopingTests`, `PresetApiTests`, `PresetQuickLogApiTests`, `LeaderboardApiTests`, `LeaderboardExerciseApiTests`, `ChatApiTests`, plus model tests). New endpoints should follow this pattern rather than reintroducing template-view-style tests.
+- **Tests are API-only now** (`gym/tests.py`, 88 tests) — the old 83 tests against template views were deleted along with `gym/views.py`. Structure: `ApiTestCase` base with `alice`/`bob` fixtures + helpers (`login_as`, `post_json`, `put_json`, `make_day`, `make_preset`), then per-feature classes (`AuthApiTests`, `AuthGatingTests`, `ExerciseApiTests`, `WorkoutDayApiTests`, `UserScopingTests`, `PresetApiTests`, `PresetQuickLogApiTests`, `LeaderboardApiTests`, `LeaderboardExerciseApiTests`, `ChatApiTests`, `CoachApiTests`, plus model tests). New endpoints should follow this pattern rather than reintroducing template-view-style tests.
 - **`admin.py` is an empty stub** — no models registered.
 - Migrations were originally generated by Django 6.0.7 but run on 5.2 — no known issues; regenerate if upgrading Django.
 - **Multi-select chip UI must use real `<button type="button">` elements, not `<div onClick>`.** `DayCreate.jsx` and `PresetForm.jsx` both let you tap exercise "chips" to build a selection; they used to be divs with `role="checkbox"`/`tabIndex`, which had a real mobile bug — deselecting the *last* selected exercise silently failed. Root cause: the "Selected Exercises" summary card was conditionally rendered on `selected.size > 0`, so removing the last item unmounted an *ancestor* of the tapped element as a direct, synchronous result of that same tap — a qualitatively bigger DOM mutation than removing one row from a list whose parent stays mounted, and mobile browsers can drop or misfire the click in that situation. Fixed by (1) always rendering the summary card (empty-state message instead of unmounting it), and (2) using native `<button>`s for both the chip grid and the row-level "✕" remove control (`.chip-remove` class, ≥32px tap target) instead of `div`/`span` + `onClick`. Any new tap-to-toggle UI should follow this pattern — don't reintroduce div-as-button chips, and don't gate a container that holds interactive children on the very state those children mutate.
