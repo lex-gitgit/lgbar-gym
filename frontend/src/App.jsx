@@ -15,6 +15,8 @@ const DayCreate = lazy(() => import("./pages/DayCreate"));
 const DayDetail = lazy(() => import("./pages/DayDetail"));
 const PresetForm = lazy(() => import("./pages/PresetForm"));
 const PresetDetail = lazy(() => import("./pages/PresetDetail"));
+const Leaderboard = lazy(() => import("./pages/Leaderboard"));
+const Chat = lazy(() => import("./pages/Chat"));
 
 function PageLoading() {
   return (
@@ -108,6 +110,8 @@ export default function App() {
               <Route path="/presets/new" element={<PresetForm showFlash={showFlash} />} />
               <Route path="/presets/:id" element={<PresetDetail showFlash={showFlash} />} />
               <Route path="/presets/:id/edit" element={<PresetForm showFlash={showFlash} />} />
+              <Route path="/leaderboard" element={<Leaderboard user={user} />} />
+              <Route path="/chat" element={<Chat user={user} showFlash={showFlash} />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>

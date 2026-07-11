@@ -10,22 +10,30 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# Settings are driven by environment variables in production. The defaults
+# below keep local development working with no env vars set.
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-mo#)-d)mn*+_h4pb(x-a1tqc-ub^4np!0fgu6mf+2q02sa-@mw"
+# In production, set SECRET_KEY to a fresh random value (see .env.example).
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY",
+    "django-insecure-mo#)-d)mn*+_h4pb(x-a1tqc-ub^4np!0fgu6mf+2q02sa-@mw",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# DEBUG defaults to True for local dev; set DEBUG=False in production.
+DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+# Comma-separated list of hostnames the app is served from, e.g.
+# "yourname.pythonanywhere.com". Defaults to localhost for dev.
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 
 # Application definition
@@ -44,6 +52,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -108,7 +117,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Manila"
 
 USE_I18N = True
 
@@ -120,9 +129,22 @@ USE_TZ = True
 
 LOGIN_URL = "/"
 STATIC_URL = "static/"
-STATICFILES_DIRS = []
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
+
+# The built React app (frontend/dist) is collected into STATIC_ROOT by
+# `collectstatic` and served by WhiteNoise. Its assets are referenced under
+# /static/ (see vite.config.js `base`).
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [FRONTEND_DIST_DIR] if FRONTEND_DIST_DIR.exists() else []
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -133,11 +155,30 @@ REST_FRAMEWORK = {
     ],
 }
 
+# CORS is only needed for the split-origin local dev setup (Vite on :5173
+# proxying to Django on :8000). In production the SPA is served same-origin,
+# so no cross-origin requests occur.
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
+# Django requires the scheme in CSRF_TRUSTED_ORIGINS. Keep the Vite dev origin
+# and, in production, trust https://<each configured host>.
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
+] + [
+    f"https://{host}"
+    for host in ALLOWED_HOSTS
+    if host not in ("localhost", "127.0.0.1", "*")
 ]
+
+# Production hardening — only applied when DEBUG is off, so local dev is
+# unaffected. The proxy header lets Django recognize HTTPS behind a host's
+# load balancer (PythonAnywhere, Fly, Render, etc. all set it).
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

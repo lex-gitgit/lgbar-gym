@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import (
+    ChatMessage,
     DayPreset,
     DayPresetExercise,
     Exercise,
@@ -78,3 +79,11 @@ class DayPresetDetailSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username", read_only=True)
+
+    class Meta:
+        model = ChatMessage
+        fields = ["id", "username", "text", "created_at"]

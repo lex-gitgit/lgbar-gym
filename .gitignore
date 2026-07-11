@@ -3,6 +3,11 @@ __pycache__/
 db.sqlite3
 db.sqlite3.bak
 node_modules/
-frontend/dist/
 *.log
 .DS_Store
+
+# Local env file with real secrets (commit .env.example instead)
+.env
+
+# collectstatic output — regenerated on deploy
+staticfiles/

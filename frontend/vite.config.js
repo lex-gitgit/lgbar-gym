@@ -1,7 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+// In production the app is served by Django/WhiteNoise, whose static files
+// live under /static/. In dev, Vite serves from the root.
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "/static/" : "/",
   plugins: [react()],
   server: {
     host: true,
@@ -13,4 +16,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

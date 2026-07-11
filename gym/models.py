@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -31,8 +32,18 @@ class Exercise(models.Model):
 
 
 class DayPreset(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="day_presets"
+    )
+    name = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "name"], name="unique_preset_name_per_user"
+            )
+        ]
 
     def __str__(self):
         return self.name
@@ -49,6 +60,9 @@ class DayPresetExercise(models.Model):
 
 
 class WorkoutDay(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="workout_days"
+    )
     date = models.DateField()
     preset = models.ForeignKey(
         DayPreset, on_delete=models.SET_NULL, null=True, blank=True
@@ -97,3 +111,17 @@ class WorkoutSet(models.Model):
 
     def __str__(self):
         return f"Set {self.set_number}: {self.weight}{self.weight_unit} x {self.reps}"
+
+
+class ChatMessage(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_messages"
+    )
+    text = models.TextField(max_length=1000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.text[:30]}"

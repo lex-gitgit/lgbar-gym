@@ -1,11 +1,14 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib.auth.models import User
+from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import (
+    ChatMessage,
     DayPreset,
     DayPresetExercise,
     Exercise,
@@ -20,6 +23,8 @@ EX_BETA = "ZZ Test Beta"
 EX_GAMMA = "ZZ Test Gamma"
 EX_DELTA = "ZZ Test Delta"
 
+
+# --- Model tests ---
 
 class ExerciseModelTest(TestCase):
     def test_create_exercise(self):
@@ -42,756 +47,501 @@ class ExerciseModelTest(TestCase):
 
 class DayPresetModelTest(TestCase):
     def setUp(self):
-        self.exercise = Exercise.objects.create(name=EX_ALPHA)
+        self.alice = User.objects.create_user("alice", password="pw")
+        self.bob = User.objects.create_user("bob", password="pw")
 
-    def test_create_preset(self):
-        p = DayPreset.objects.create(name="ZZ Test Preset")
-        self.assertEqual(str(p), "ZZ Test Preset")
-        self.assertIsNotNone(p.created_at)
+    def test_name_unique_per_user(self):
+        DayPreset.objects.create(user=self.alice, name="Push")
+        with self.assertRaises(IntegrityError):
+            DayPreset.objects.create(user=self.alice, name="Push")
 
-    def test_preset_with_exercises(self):
-        p = DayPreset.objects.create(name="ZZ Test Preset B")
-        e2 = Exercise.objects.create(name=EX_BETA)
-        DayPresetExercise.objects.create(preset=p, exercise=self.exercise, order=0)
-        DayPresetExercise.objects.create(preset=p, exercise=e2, order=1)
-        self.assertEqual(p.exercises.count(), 2)
-
-    def test_preset_exercise_order(self):
-        p = DayPreset.objects.create(name="ZZ Test Order")
-        e1 = Exercise.objects.create(name=EX_BETA)
-        e2 = Exercise.objects.create(name=EX_GAMMA)
-        DayPresetExercise.objects.create(preset=p, exercise=e2, order=1)
-        DayPresetExercise.objects.create(preset=p, exercise=e1, order=0)
-        exercises = list(p.exercises.all())
-        self.assertEqual(exercises[0].exercise.name, EX_BETA)
-        self.assertEqual(exercises[1].exercise.name, EX_GAMMA)
-
-    def test_preset_exercise_unique_together(self):
-        p = DayPreset.objects.create(name="ZZ Test Unique")
-        DayPresetExercise.objects.create(preset=p, exercise=self.exercise, order=0)
-        with self.assertRaises(Exception):
-            DayPresetExercise.objects.create(preset=p, exercise=self.exercise, order=1)
+    def test_same_name_across_users_allowed(self):
+        DayPreset.objects.create(user=self.alice, name="Push")
+        DayPreset.objects.create(user=self.bob, name="Push")
+        self.assertEqual(DayPreset.objects.filter(name="Push").count(), 2)
 
 
 class WorkoutDayModelTest(TestCase):
     def setUp(self):
-        self.preset = DayPreset.objects.create(name="ZZ Push Day")
-
-    def test_create_workout_day_without_preset(self):
-        wd = WorkoutDay.objects.create(date="2025-01-01")
-        self.assertEqual(str(wd), "2025-01-01 - Custom")
-        self.assertIsNone(wd.preset)
-
-    def test_create_workout_day_with_preset(self):
-        wd = WorkoutDay.objects.create(date="2025-01-01", preset=self.preset)
-        self.assertEqual(str(wd), "2025-01-01 - ZZ Push Day")
+        self.alice = User.objects.create_user("alice", password="pw")
 
     def test_ordering_newest_first(self):
-        d1 = WorkoutDay.objects.create(date="2025-01-01")
-        d2 = WorkoutDay.objects.create(date="2025-01-02")
-        days = list(WorkoutDay.objects.all())
-        self.assertEqual(days[0], d2)
-        self.assertEqual(days[1], d1)
+        WorkoutDay.objects.create(user=self.alice, date=date(2026, 1, 1))
+        WorkoutDay.objects.create(user=self.alice, date=date(2026, 1, 10))
+        days = list(WorkoutDay.objects.filter(user=self.alice))
+        self.assertEqual(days[0].date, date(2026, 1, 10))
 
-    def test_notes_blank_by_default(self):
-        wd = WorkoutDay.objects.create(date="2025-01-01")
-        self.assertEqual(wd.notes, "")
+    def test_preset_delete_sets_null(self):
+        preset = DayPreset.objects.create(user=self.alice, name="Push")
+        day = WorkoutDay.objects.create(user=self.alice, date=date(2026, 1, 1), preset=preset)
+        preset.delete()
+        day.refresh_from_db()
+        self.assertIsNone(day.preset)
 
-    def test_preset_set_null_on_delete(self):
-        wd = WorkoutDay.objects.create(date="2025-01-01", preset=self.preset)
-        self.preset.delete()
-        wd.refresh_from_db()
-        self.assertIsNone(wd.preset)
-
-
-class WorkoutExerciseModelTest(TestCase):
-    def setUp(self):
-        self.exercise = Exercise.objects.create(name=EX_ALPHA)
-        self.day = WorkoutDay.objects.create(date="2025-01-01")
-
-    def test_create_workout_exercise(self):
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        self.assertIn(EX_ALPHA, str(we))
-
-    def test_ordering(self):
-        e2 = Exercise.objects.create(name=EX_BETA)
-        we1 = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=1
-        )
-        we2 = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=e2, order=0
-        )
-        exercises = list(self.day.exercises.all())
-        self.assertEqual(exercises[0], we2)
-        self.assertEqual(exercises[1], we1)
-
-    def test_cascade_delete_with_workout_day(self):
-        WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        self.day.delete()
-        self.assertEqual(WorkoutExercise.objects.count(), 0)
-
-    def test_notes_blank_by_default(self):
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        self.assertEqual(we.notes, "")
+    def test_cascade_delete_removes_children(self):
+        ex = Exercise.objects.create(name=EX_ALPHA)
+        day = WorkoutDay.objects.create(user=self.alice, date=date(2026, 1, 1))
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=5, weight=100)
+        day.delete()
+        self.assertEqual(WorkoutExercise.objects.filter(id=we.id).count(), 0)
+        self.assertEqual(WorkoutSet.objects.count(), 0)
 
 
 class WorkoutSetModelTest(TestCase):
     def setUp(self):
-        exercise = Exercise.objects.create(name=EX_ALPHA)
-        day = WorkoutDay.objects.create(date="2025-01-01")
-        self.we = WorkoutExercise.objects.create(
-            workout_day=day, exercise=exercise, order=0
-        )
+        self.alice = User.objects.create_user("alice", password="pw")
+        ex = Exercise.objects.create(name=EX_ALPHA)
+        day = WorkoutDay.objects.create(user=self.alice, date=date(2026, 1, 1))
+        self.we = WorkoutExercise.objects.create(workout_day=day, exercise=ex, order=0)
 
-    def test_create_set(self):
-        s = WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=100, reps=10
-        )
-        self.assertIn("Set 1:", str(s))
-        self.assertIn("kg", str(s))
-        self.assertEqual(s.weight_unit, "kg")
-
-    def test_set_lbs_unit(self):
-        s = WorkoutSet.objects.create(
-            workout_exercise=self.we,
-            set_number=1,
-            weight=225,
-            weight_unit="lbs",
-            reps=8,
-        )
-        self.assertIn("Set 1:", str(s))
-        self.assertIn("lbs", str(s))
-
-    def test_ordering_by_set_number(self):
-        WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=2, weight=100, reps=8
-        )
-        WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=80, reps=10
-        )
+    def test_str_and_ordering(self):
+        WorkoutSet.objects.create(workout_exercise=self.we, set_number=2, reps=8, weight=50)
+        WorkoutSet.objects.create(workout_exercise=self.we, set_number=1, reps=10, weight=45)
         sets = list(self.we.sets.all())
         self.assertEqual(sets[0].set_number, 1)
-        self.assertEqual(sets[1].set_number, 2)
-
-    def test_cascade_delete_with_workout_exercise(self):
-        WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=100, reps=10
-        )
-        self.we.delete()
-        self.assertEqual(WorkoutSet.objects.count(), 0)
-
-    def test_decimal_weight(self):
-        s = WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=67.5, reps=12
-        )
-        self.assertEqual(float(s.weight), 67.5)
-
-    def test_unit_choices(self):
-        s = WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=50, reps=10
-        )
-        self.assertIn(s.weight_unit, ["kg", "lbs"])
+        self.assertIn("kg", str(sets[0]))
 
 
-class AuthViewTest(TestCase):
+# --- API test base ---
+
+class ApiTestCase(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
+        self.alice = User.objects.create_user("alice", password="pw12345")
+        self.bob = User.objects.create_user("bob", password="pw12345")
+        self.ex = Exercise.objects.create(name=EX_ALPHA, body_part="chest")
+        self.ex2 = Exercise.objects.create(name=EX_BETA, body_part="back")
 
-    def test_login_get(self):
-        response = self.client.get(reverse("login"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/login.html")
+    def login_as(self, user):
+        self.client.force_login(user)
 
-    def test_login_post_valid(self):
-        response = self.client.post(
-            reverse("login"), {"username": "testuser", "password": "pass1234"}
-        )
-        self.assertRedirects(response, reverse("dashboard"))
+    def post_json(self, url, data):
+        return self.client.post(url, data=json.dumps(data), content_type="application/json")
 
-    def test_login_post_invalid(self):
-        response = self.client.post(
-            reverse("login"), {"username": "testuser", "password": "wrong"}
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/login.html")
+    def put_json(self, url, data):
+        return self.client.put(url, data=json.dumps(data), content_type="application/json")
 
-    def test_login_redirects_authenticated(self):
-        self.client.login(username="testuser", password="pass1234")
-        response = self.client.get(reverse("login"))
-        self.assertRedirects(response, reverse("dashboard"))
+    def make_day(self, user, day_date=None, notes=""):
+        return WorkoutDay.objects.create(user=user, date=day_date or date(2026, 1, 1), notes=notes)
+
+    def make_preset(self, user, name="Push"):
+        return DayPreset.objects.create(user=user, name=name)
+
+
+# --- Auth ---
+
+class AuthApiTests(ApiTestCase):
+    def test_login_valid(self):
+        res = self.post_json(reverse("api_login"), {"username": "alice", "password": "pw12345"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["username"], "alice")
+
+    def test_login_invalid(self):
+        res = self.post_json(reverse("api_login"), {"username": "alice", "password": "wrong"})
+        self.assertEqual(res.status_code, 401)
 
     def test_logout(self):
-        self.client.login(username="testuser", password="pass1234")
-        response = self.client.post(reverse("logout"))
-        self.assertRedirects(response, reverse("login"))
+        self.login_as(self.alice)
+        res = self.client.post(reverse("api_logout"))
+        self.assertEqual(res.status_code, 200)
+        res = self.client.get(reverse("api_me"))
+        self.assertEqual(res.status_code, 403)
 
-    def test_redirect_unauthenticated(self):
-        protected_urls = [
-            reverse("dashboard"),
-            reverse("exercise_list"),
-            reverse("day_create"),
-            reverse("preset_list"),
-            reverse("preset_create"),
+    def test_me_unauthenticated(self):
+        res = self.client.get(reverse("api_me"))
+        self.assertEqual(res.status_code, 403)
+
+    def test_me_authenticated(self):
+        self.login_as(self.alice)
+        res = self.client.get(reverse("api_me"))
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["username"], "alice")
+
+
+class AuthGatingTests(ApiTestCase):
+    def test_protected_endpoints_require_login(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        s = WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=5, weight=100)
+        preset = self.make_preset(self.alice)
+
+        endpoints = [
+            ("get", reverse("api_exercise_list")),
+            ("get", reverse("api_day_list_create")),
+            ("get", reverse("api_day_detail", args=[day.id])),
+            ("post", reverse("api_day_add_exercise", args=[day.id])),
+            ("delete", reverse("api_day_remove_exercise", args=[day.id, we.id])),
+            ("post", reverse("api_set_add", args=[we.id])),
+            ("delete", reverse("api_set_delete", args=[s.id])),
+            ("get", reverse("api_preset_list_create")),
+            ("get", reverse("api_preset_detail", args=[preset.id])),
+            ("get", reverse("api_leaderboard")),
+            ("get", reverse("api_chat")),
         ]
-        for url in protected_urls:
-            response = self.client.get(url)
-            self.assertRedirects(
-                response, f'{reverse("login")}?next={url}'
-            )
+        for method, url in endpoints:
+            res = getattr(self.client, method)(url)
+            self.assertEqual(res.status_code, 403, f"{method.upper()} {url} should require auth")
 
 
-class ExerciseViewTest(TestCase):
+# --- Exercises ---
+
+class ExerciseApiTests(ApiTestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
+        super().setUp()
+        self.login_as(self.alice)
 
-    def test_exercise_list_get(self):
-        response = self.client.get(reverse("exercise_list"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/exercises.html")
+    def test_list_includes_seed_and_custom(self):
+        res = self.client.get(reverse("api_exercise_list"))
+        names = [e["name"] for e in res.json()]
+        self.assertIn(EX_ALPHA, names)
+        self.assertIn("Bench Press", names)
 
-    def test_exercise_create_post(self):
-        response = self.client.post(
-            reverse("exercise_list"), {"name": EX_ALPHA}
-        )
-        self.assertRedirects(response, reverse("exercise_list"))
-        self.assertTrue(Exercise.objects.filter(name=EX_ALPHA).exists())
+    def test_search_filter(self):
+        res = self.client.get(reverse("api_exercise_list"), {"search": "ZZ Test Alpha"})
+        names = [e["name"] for e in res.json()]
+        self.assertEqual(names, [EX_ALPHA])
 
-    def test_exercise_create_duplicate(self):
-        Exercise.objects.create(name=EX_ALPHA)
-        response = self.client.post(
-            reverse("exercise_list"), {"name": EX_ALPHA}
-        )
-        self.assertRedirects(response, reverse("exercise_list"))
-        self.assertEqual(Exercise.objects.filter(name=EX_ALPHA).count(), 1)
+    def test_body_part_filter(self):
+        res = self.client.get(reverse("api_exercise_list"), {"body_part": "back"})
+        names = [e["name"] for e in res.json()]
+        self.assertIn(EX_BETA, names)
+        self.assertNotIn(EX_ALPHA, names)
 
-    def test_exercise_create_empty_name(self):
-        response = self.client.post(reverse("exercise_list"), {"name": ""})
-        self.assertRedirects(response, reverse("exercise_list"))
+    def test_create_exercise(self):
+        res = self.post_json(reverse("api_exercise_list"), {"name": EX_GAMMA, "body_part": "legs"})
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(Exercise.objects.filter(name=EX_GAMMA).exists())
 
-    def test_exercise_create_whitespace_name(self):
-        response = self.client.post(reverse("exercise_list"), {"name": "   "})
-        self.assertRedirects(response, reverse("exercise_list"))
+    def test_create_duplicate_is_idempotent(self):
+        self.post_json(reverse("api_exercise_list"), {"name": EX_GAMMA})
+        self.post_json(reverse("api_exercise_list"), {"name": EX_GAMMA})
+        self.assertEqual(Exercise.objects.filter(name=EX_GAMMA).count(), 1)
 
-    def test_exercise_delete(self):
-        e = Exercise.objects.create(name=EX_ALPHA)
-        response = self.client.post(
-            reverse("exercise_delete", args=[e.id])
-        )
-        self.assertRedirects(response, reverse("exercise_list"))
-        self.assertFalse(Exercise.objects.filter(id=e.id).exists())
-
-    def test_exercise_delete_nonexistent(self):
-        response = self.client.post(
-            reverse("exercise_delete", args=[999])
-        )
-        self.assertEqual(response.status_code, 404)
-
-    def test_exercises_ordered_in_context(self):
-        Exercise.objects.create(name="ZZZ B")
-        Exercise.objects.create(name="ZZZ A")
-        response = self.client.get(reverse("exercise_list"))
-        names = [e.name for e in response.context["exercises"]]
-        zzz_names = [n for n in names if n.startswith("ZZZ ")]
-        self.assertEqual(zzz_names, sorted(zzz_names))
+    def test_delete_exercise(self):
+        ex = Exercise.objects.create(name=EX_GAMMA)
+        res = self.client.delete(reverse("api_exercise_delete", args=[ex.id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Exercise.objects.filter(id=ex.id).exists())
 
 
-class DayCreateViewTest(TestCase):
+# --- Workout days ---
+
+class WorkoutDayApiTests(ApiTestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-        self.ex1 = Exercise.objects.create(name=EX_ALPHA)
+        super().setUp()
+        self.login_as(self.alice)
 
-    def test_day_create_get(self):
-        response = self.client.get(reverse("day_create"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/day_create.html")
-        self.assertEqual(response.context["today"], date.today().isoformat())
-
-    def test_day_create_post_valid(self):
-        response = self.client.post(
-            reverse("day_create"),
-            {"date": "2025-01-01", "exercises": str(self.ex1.id)},
+    def test_create_day_with_exercises(self):
+        res = self.post_json(
+            reverse("api_day_list_create"),
+            {"date": "2026-01-05", "exercises": f"{self.ex.id},{self.ex2.id}", "notes": "Good session"},
         )
-        self.assertEqual(WorkoutDay.objects.count(), 1)
-        day = WorkoutDay.objects.first()
-        self.assertRedirects(response, reverse("day_detail", args=[day.id]))
-        self.assertEqual(day.exercises.count(), 1)
-
-    def test_day_create_post_missing_date(self):
-        response = self.client.post(
-            reverse("day_create"), {"exercises": str(self.ex1.id)}
-        )
-        self.assertRedirects(response, reverse("day_create"))
-        self.assertEqual(WorkoutDay.objects.count(), 0)
-
-    def test_day_create_post_missing_exercises(self):
-        response = self.client.post(reverse("day_create"), {"date": "2025-01-01"})
-        self.assertRedirects(response, reverse("day_create"))
-        self.assertEqual(WorkoutDay.objects.count(), 0)
-
-    def test_day_create_post_empty_exercises(self):
-        response = self.client.post(
-            reverse("day_create"), {"date": "2025-01-01", "exercises": ""}
-        )
-        self.assertRedirects(response, reverse("day_create"))
-        self.assertEqual(WorkoutDay.objects.count(), 0)
-
-    def test_day_create_with_preset(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        DayPresetExercise.objects.create(
-            preset=preset, exercise=self.ex1, order=0
-        )
-        response = self.client.post(
-            reverse("day_create"),
-            {
-                "date": "2025-01-01",
-                "preset": str(preset.id),
-                "exercises": str(self.ex1.id),
-            },
-        )
-        day = WorkoutDay.objects.first()
-        self.assertEqual(day.preset, preset)
-        self.assertRedirects(response, reverse("day_detail", args=[day.id]))
-
-    def test_day_create_multiple_exercises(self):
-        ex2 = Exercise.objects.create(name=EX_BETA)
-        response = self.client.post(
-            reverse("day_create"),
-            {
-                "date": "2025-01-01",
-                "exercises": f"{self.ex1.id},{ex2.id}",
-            },
-        )
-        day = WorkoutDay.objects.first()
+        self.assertEqual(res.status_code, 200)
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        self.assertEqual(day.user, self.alice)
         self.assertEqual(day.exercises.count(), 2)
+        self.assertEqual(list(day.exercises.order_by("order")), list(day.exercises.all()))
 
-    def test_day_create_preset_exercises_in_context(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        preset_ex = DayPresetExercise.objects.create(
-            preset=preset, exercise=self.ex1, order=0
+    def test_create_day_missing_fields(self):
+        res = self.post_json(reverse("api_day_list_create"), {"date": "", "exercises": ""})
+        self.assertEqual(res.status_code, 400)
+
+    def test_list_scoped_and_capped_at_20(self):
+        for i in range(25):
+            self.make_day(self.alice, day_date=date(2026, 1, 1) + timedelta(days=i))
+        res = self.client.get(reverse("api_day_list_create"))
+        self.assertEqual(len(res.json()), 20)
+
+    def test_day_detail_shape(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=10, weight=50)
+        res = self.client.get(reverse("api_day_detail", args=[day.id]))
+        data = res.json()
+        self.assertEqual(len(data["exercises"]), 1)
+        self.assertEqual(len(data["exercises"][0]["sets"]), 1)
+
+    def test_delete_day_cascades(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        res = self.client.delete(reverse("api_day_detail", args=[day.id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(WorkoutExercise.objects.filter(id=we.id).exists())
+
+    def test_add_exercise_appends_next_order(self):
+        day = self.make_day(self.alice)
+        WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        res = self.post_json(
+            reverse("api_day_add_exercise", args=[day.id]), {"exercise_id": self.ex2.id}
         )
-        response = self.client.get(reverse("day_create"))
-        raw = response.context["preset_exercises"]
-        data = json.loads(raw)
-        self.assertIn(str(preset.id), data)
-        self.assertIn(preset_ex.exercise_id, data[str(preset.id)])
-
-
-class DayDetailViewTest(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-        self.exercise = Exercise.objects.create(name=EX_ALPHA)
-        self.day = WorkoutDay.objects.create(date="2025-01-01")
-
-    def test_day_detail_get(self):
-        response = self.client.get(reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/day_detail.html")
-
-    def test_day_detail_nonexistent(self):
-        response = self.client.get(reverse("day_detail", args=[999]))
-        self.assertEqual(response.status_code, 404)
-
-    def test_day_detail_shows_exercises(self):
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        response = self.client.get(reverse("day_detail", args=[self.day.id]))
-        self.assertContains(response, EX_ALPHA)
-
-    def test_day_detail_shows_sets(self):
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        WorkoutSet.objects.create(
-            workout_exercise=we, set_number=1, weight=100, reps=10
-        )
-        response = self.client.get(reverse("day_detail", args=[self.day.id]))
-        self.assertContains(response, "100")
-        self.assertContains(response, "10")
-
-
-class DayExerciseManageViewTest(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-        self.exercise = Exercise.objects.create(name=EX_ALPHA)
-        self.day = WorkoutDay.objects.create(date="2025-01-01")
-
-    def test_add_exercise(self):
-        response = self.client.post(
-            reverse("day_add_exercise", args=[self.day.id]),
-            {"exercise_id": self.exercise.id},
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.day.exercises.count(), 1)
-
-    def test_add_exercise_increments_order(self):
-        WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        e2 = Exercise.objects.create(name=EX_BETA)
-        response = self.client.post(
-            reverse("day_add_exercise", args=[self.day.id]),
-            {"exercise_id": e2.id},
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        we2 = WorkoutExercise.objects.filter(workout_day=self.day).get(exercise=e2)
-        self.assertEqual(we2.order, 1)
+        self.assertEqual(res.status_code, 200)
+        new_we = day.exercises.get(exercise=self.ex2)
+        self.assertEqual(new_we.order, 1)
 
     def test_remove_exercise(self):
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        response = self.client.post(
-            reverse("day_remove_exercise", args=[self.day.id, we.id])
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.day.exercises.count(), 0)
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        res = self.client.delete(reverse("api_day_remove_exercise", args=[day.id, we.id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(WorkoutExercise.objects.filter(id=we.id).exists())
 
-    def test_remove_exercise_wrong_day(self):
-        other_day = WorkoutDay.objects.create(date="2025-01-02")
-        we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        response = self.client.post(
-            reverse("day_remove_exercise", args=[other_day.id, we.id])
-        )
-        self.assertEqual(response.status_code, 404)
-
-    def test_delete_day(self):
-        response = self.client.post(reverse("day_delete", args=[self.day.id]))
-        self.assertRedirects(response, reverse("dashboard"))
-        self.assertEqual(WorkoutDay.objects.count(), 0)
-
-    def test_delete_day_cascades_exercises(self):
-        WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=self.exercise, order=0
-        )
-        self.client.post(reverse("day_delete", args=[self.day.id]))
-        self.assertEqual(WorkoutExercise.objects.count(), 0)
-
-
-class SetViewTest(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-        exercise = Exercise.objects.create(name=EX_ALPHA)
-        self.day = WorkoutDay.objects.create(date="2025-01-01")
-        self.we = WorkoutExercise.objects.create(
-            workout_day=self.day, exercise=exercise, order=0
-        )
-
-    def test_add_set_valid(self):
-        response = self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"weight": "100", "reps": "10", "weight_unit": "kg"},
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.we.sets.count(), 1)
-        s = self.we.sets.first()
-        self.assertEqual(s.set_number, 1)
-
-    def test_add_set_increments_number(self):
-        WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=100, reps=10
-        )
-        self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"weight": "110", "reps": "8", "weight_unit": "kg"},
-        )
-        self.assertEqual(self.we.sets.count(), 2)
-        s = self.we.sets.last()
-        self.assertEqual(s.set_number, 2)
-
-    def test_add_set_missing_weight(self):
-        response = self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"reps": "10", "weight_unit": "kg"},
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.we.sets.count(), 0)
-
-    def test_add_set_missing_reps(self):
-        response = self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"weight": "100", "weight_unit": "kg"},
-        )
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.we.sets.count(), 0)
-
-    def test_add_set_default_unit_is_kg(self):
-        self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"weight": "100", "reps": "10"},
-        )
-        s = self.we.sets.first()
-        self.assertEqual(s.weight_unit, "kg")
-
-    def test_add_set_lbs(self):
-        self.client.post(
-            reverse("set_add", args=[self.we.id]),
-            {"weight": "225", "reps": "8", "weight_unit": "lbs"},
-        )
-        s = self.we.sets.first()
-        self.assertEqual(s.weight_unit, "lbs")
-
-    def test_delete_set(self):
-        s = WorkoutSet.objects.create(
-            workout_exercise=self.we, set_number=1, weight=100, reps=10
-        )
-        response = self.client.post(reverse("set_delete", args=[s.id]))
-        self.assertRedirects(response, reverse("day_detail", args=[self.day.id]))
-        self.assertEqual(self.we.sets.count(), 0)
-
-    def test_delete_set_nonexistent(self):
-        response = self.client.post(reverse("set_delete", args=[999]))
-        self.assertEqual(response.status_code, 404)
-
-
-class DashboardViewTest(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-
-    def test_dashboard_empty(self):
-        response = self.client.get(reverse("dashboard"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/dashboard.html")
-        self.assertContains(response, "No workouts logged yet")
-
-    def test_dashboard_shows_days(self):
-        WorkoutDay.objects.create(date="2025-01-01")
-        WorkoutDay.objects.create(date="2025-01-02")
-        response = self.client.get(reverse("dashboard"))
-        days = response.context["days"]
-        self.assertEqual(len(days), 2)
-
-    def test_dashboard_limited_to_20(self):
-        for i in range(25):
-            WorkoutDay.objects.create(date=f"2025-01-{i+1:02d}")
-        response = self.client.get(reverse("dashboard"))
-        self.assertEqual(len(response.context["days"]), 20)
-
-
-class PresetViewTest(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-        self.ex1 = Exercise.objects.create(name=EX_ALPHA)
-        self.ex2 = Exercise.objects.create(name=EX_BETA)
-
-    def test_preset_list_get(self):
-        response = self.client.get(reverse("preset_list"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/presets.html")
-
-    def test_preset_list_empty(self):
-        response = self.client.get(reverse("preset_list"))
-        self.assertContains(response, "No presets yet")
-
-    def test_preset_create_get(self):
-        response = self.client.get(reverse("preset_create"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/preset_form.html")
-
-    def test_preset_create_post_valid(self):
-        response = self.client.post(
-            reverse("preset_create"),
-            {"name": "ZZ Push Day", "exercises": str(self.ex1.id)},
-        )
-        preset = DayPreset.objects.first()
-        self.assertRedirects(response, reverse("preset_detail", args=[preset.id]))
-        self.assertEqual(preset.exercises.count(), 1)
-
-    def test_preset_create_multiple_exercises(self):
-        response = self.client.post(
-            reverse("preset_create"),
-            {"name": "ZZ Full Body", "exercises": f"{self.ex1.id},{self.ex2.id}"},
-        )
-        preset = DayPreset.objects.first()
-        self.assertEqual(preset.exercises.count(), 2)
-
-    def test_preset_create_missing_name(self):
-        response = self.client.post(
-            reverse("preset_create"),
-            {"name": "", "exercises": str(self.ex1.id)},
-        )
-        self.assertRedirects(response, reverse("preset_create"))
-        self.assertEqual(DayPreset.objects.count(), 0)
-
-    def test_preset_create_missing_exercises(self):
-        response = self.client.post(
-            reverse("preset_create"), {"name": "ZZ Push Day"}
-        )
-        self.assertRedirects(response, reverse("preset_create"))
-        self.assertEqual(DayPreset.objects.count(), 0)
-
-    def test_preset_create_empty_exercises(self):
-        response = self.client.post(
-            reverse("preset_create"),
-            {"name": "ZZ Push Day", "exercises": ""},
-        )
-        self.assertRedirects(response, reverse("preset_create"))
-        self.assertEqual(DayPreset.objects.count(), 0)
-
-    def test_preset_detail(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        DayPresetExercise.objects.create(
-            preset=preset, exercise=self.ex1, order=0
-        )
-        response = self.client.get(reverse("preset_detail", args=[preset.id]))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "gym/preset_detail.html")
-        self.assertContains(response, EX_ALPHA)
-
-    def test_preset_detail_nonexistent(self):
-        response = self.client.get(reverse("preset_detail", args=[999]))
-        self.assertEqual(response.status_code, 404)
-
-    def test_preset_edit_get(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        DayPresetExercise.objects.create(
-            preset=preset, exercise=self.ex1, order=0
-        )
-        response = self.client.get(reverse("preset_edit", args=[preset.id]))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(list(response.context["selected"]), [self.ex1.id])
-
-    def test_preset_edit_post(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        DayPresetExercise.objects.create(
-            preset=preset, exercise=self.ex1, order=0
-        )
-        response = self.client.post(
-            reverse("preset_edit", args=[preset.id]),
-            {"name": "ZZ Pull Day", "exercises": str(self.ex2.id)},
-        )
-        self.assertRedirects(response, reverse("preset_detail", args=[preset.id]))
-        preset.refresh_from_db()
-        self.assertEqual(preset.name, "ZZ Pull Day")
-        self.assertEqual(preset.exercises.count(), 1)
-        self.assertEqual(
-            preset.exercises.first().exercise_id, self.ex2.id
-        )
-
-    def test_preset_edit_missing_fields(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        response = self.client.post(
-            reverse("preset_edit", args=[preset.id]),
-            {"name": "", "exercises": ""},
-        )
-        self.assertRedirects(response, reverse("preset_edit", args=[preset.id]))
-        preset.refresh_from_db()
-        self.assertEqual(preset.name, "ZZ Push Day")
-
-    def test_preset_delete(self):
-        preset = DayPreset.objects.create(name="ZZ Push Day")
-        response = self.client.post(reverse("preset_delete", args=[preset.id]))
-        self.assertRedirects(response, reverse("preset_list"))
-        self.assertEqual(DayPreset.objects.count(), 0)
-
-    def test_preset_delete_nonexistent(self):
-        response = self.client.post(reverse("preset_delete", args=[999]))
-        self.assertEqual(response.status_code, 404)
-
-
-class IntegrationTest(TestCase):
-    def test_full_workflow(self):
-        user = User.objects.create_user(username="testuser", password="pass1234")
-        self.client.login(username="testuser", password="pass1234")
-
-        # Create exercises (use names not in seed data)
-        self.client.post(reverse("exercise_list"), {"name": EX_ALPHA})
-        self.client.post(reverse("exercise_list"), {"name": EX_BETA})
-        self.client.post(reverse("exercise_list"), {"name": EX_GAMMA})
-        self.assertEqual(Exercise.objects.count(), 36 + 3)
-
-        # Create preset
-        bp = Exercise.objects.get(name=EX_ALPHA)
-        sq = Exercise.objects.get(name=EX_BETA)
-        self.client.post(
-            reverse("preset_create"),
-            {"name": "ZZ Power Day", "exercises": f"{bp.id},{sq.id}"},
-        )
-        preset = DayPreset.objects.get(name="ZZ Power Day")
-        self.assertEqual(preset.exercises.count(), 2)
-
-        # Log a workout day with the preset
-        dl = Exercise.objects.get(name=EX_GAMMA)
-        self.client.post(
-            reverse("day_create"),
-            {
-                "date": "2025-06-15",
-                "preset": str(preset.id),
-                "notes": "Great session",
-                "exercises": f"{bp.id},{sq.id},{dl.id}",
-            },
-        )
-        day = WorkoutDay.objects.first()
-        self.assertIsNotNone(day)
-        self.assertEqual(day.preset, preset)
-        self.assertEqual(day.notes, "Great session")
-        self.assertEqual(day.exercises.count(), 3)
-
-        # Add sets to first exercise
-        we = day.exercises.first()
-        self.client.post(
-            reverse("set_add", args=[we.id]),
-            {"weight": "100", "reps": "10", "weight_unit": "kg"},
-        )
-        self.client.post(
-            reverse("set_add", args=[we.id]),
-            {"weight": "110", "reps": "8", "weight_unit": "kg"},
-        )
+    def test_set_add_increments_set_number(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        self.post_json(reverse("api_set_add", args=[we.id]), {"weight": 50, "reps": 10})
+        res = self.post_json(reverse("api_set_add", args=[we.id]), {"weight": 55, "reps": 8})
+        self.assertEqual(res.status_code, 200)
         self.assertEqual(we.sets.count(), 2)
+        self.assertEqual(list(we.sets.values_list("set_number", flat=True)), [1, 2])
 
-        # Verify on detail page
-        response = self.client.get(reverse("day_detail", args=[day.id]))
-        self.assertContains(response, EX_ALPHA)
-        self.assertContains(response, EX_BETA)
-        self.assertContains(response, EX_GAMMA)
-        self.assertContains(response, "100")
-        self.assertContains(response, "110")
+    def test_set_delete(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        s = WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=5, weight=100)
+        res = self.client.delete(reverse("api_set_delete", args=[s.id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(WorkoutSet.objects.filter(id=s.id).exists())
 
-        # Dashboard shows the day
-        response = self.client.get(reverse("dashboard"))
-        self.assertContains(response, "Jun 15, 2025")
 
-        # Delete a set
-        s = we.sets.first()
-        self.client.post(reverse("set_delete", args=[s.id]))
-        self.assertEqual(we.sets.count(), 1)
+# --- Cross-user isolation (security-critical) ---
 
-        # Remove an exercise
-        self.client.post(
-            reverse("day_remove_exercise", args=[day.id, we.id])
+class UserScopingTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.alice_day = self.make_day(self.alice, notes="alice's day")
+        self.alice_we = WorkoutExercise.objects.create(
+            workout_day=self.alice_day, exercise=self.ex, order=0
         )
-        self.assertEqual(day.exercises.count(), 2)
+        self.alice_set = WorkoutSet.objects.create(
+            workout_exercise=self.alice_we, set_number=1, reps=5, weight=100
+        )
+        self.alice_preset = self.make_preset(self.alice, name="Alice Push")
+        self.login_as(self.bob)
 
-    def test_unauthenticated_access(self):
-        response = self.client.get(reverse("dashboard"))
-        self.assertRedirects(
-            response, f'{reverse("login")}?next={reverse("dashboard")}'
-        )
+    def test_cannot_view_foreign_day(self):
+        res = self.client.get(reverse("api_day_detail", args=[self.alice_day.id]))
+        self.assertEqual(res.status_code, 404)
 
-    def test_login_then_logout_flow(self):
-        User.objects.create_user(username="testuser", password="pass1234")
-        response = self.client.post(
-            reverse("login"), {"username": "testuser", "password": "pass1234"}
+    def test_cannot_delete_foreign_day(self):
+        res = self.client.delete(reverse("api_day_detail", args=[self.alice_day.id]))
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(WorkoutDay.objects.filter(id=self.alice_day.id).exists())
+
+    def test_cannot_add_exercise_to_foreign_day(self):
+        res = self.post_json(
+            reverse("api_day_add_exercise", args=[self.alice_day.id]), {"exercise_id": self.ex2.id}
         )
-        self.assertRedirects(response, reverse("dashboard"))
-        response = self.client.post(reverse("logout"))
-        self.assertRedirects(response, reverse("login"))
-        response = self.client.get(reverse("dashboard"))
-        self.assertRedirects(
-            response, f'{reverse("login")}?next={reverse("dashboard")}'
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(self.alice_day.exercises.count(), 1)
+
+    def test_cannot_remove_foreign_exercise(self):
+        res = self.client.delete(
+            reverse("api_day_remove_exercise", args=[self.alice_day.id, self.alice_we.id])
         )
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(WorkoutExercise.objects.filter(id=self.alice_we.id).exists())
+
+    def test_cannot_add_set_to_foreign_exercise(self):
+        res = self.post_json(
+            reverse("api_set_add", args=[self.alice_we.id]), {"weight": 999, "reps": 1}
+        )
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(self.alice_we.sets.count(), 1)
+
+    def test_cannot_delete_foreign_set(self):
+        res = self.client.delete(reverse("api_set_delete", args=[self.alice_set.id]))
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(WorkoutSet.objects.filter(id=self.alice_set.id).exists())
+
+    def test_cannot_view_foreign_preset(self):
+        res = self.client.get(reverse("api_preset_detail", args=[self.alice_preset.id]))
+        self.assertEqual(res.status_code, 404)
+
+    def test_cannot_update_foreign_preset(self):
+        res = self.put_json(
+            reverse("api_preset_detail", args=[self.alice_preset.id]),
+            {"name": "Hijacked", "exercises": str(self.ex.id)},
+        )
+        self.assertEqual(res.status_code, 404)
+        self.alice_preset.refresh_from_db()
+        self.assertEqual(self.alice_preset.name, "Alice Push")
+
+    def test_cannot_delete_foreign_preset(self):
+        res = self.client.delete(reverse("api_preset_detail", args=[self.alice_preset.id]))
+        self.assertEqual(res.status_code, 404)
+        self.assertTrue(DayPreset.objects.filter(id=self.alice_preset.id).exists())
+
+    def test_day_list_excludes_foreign_days(self):
+        self.make_day(self.bob, notes="bob's day")
+        res = self.client.get(reverse("api_day_list_create"))
+        notes = [d["notes"] for d in res.json()]
+        self.assertNotIn("alice's day", notes)
+
+    def test_preset_list_excludes_foreign_presets(self):
+        self.make_preset(self.bob, name="Bob Pull")
+        res = self.client.get(reverse("api_preset_list_create"))
+        names = [p["name"] for p in res.json()]
+        self.assertNotIn("Alice Push", names)
+        self.assertIn("Bob Pull", names)
+
+    def test_foreign_preset_id_on_day_create_is_ignored(self):
+        res = self.post_json(
+            reverse("api_day_list_create"),
+            {"date": "2026-01-05", "exercises": str(self.ex.id), "preset": self.alice_preset.id},
+        )
+        self.assertEqual(res.status_code, 200)
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        self.assertIsNone(day.preset)
+
+
+# --- Presets ---
+
+class PresetApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login_as(self.alice)
+
+    def test_create_preset(self):
+        res = self.post_json(
+            reverse("api_preset_list_create"),
+            {"name": "Push", "exercises": f"{self.ex.id},{self.ex2.id}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        preset = DayPreset.objects.get(id=res.json()["id"])
+        self.assertEqual(preset.user, self.alice)
+        self.assertEqual(preset.exercises.count(), 2)
+
+    def test_duplicate_name_same_user_rejected(self):
+        self.make_preset(self.alice, name="Push")
+        res = self.post_json(
+            reverse("api_preset_list_create"), {"name": "Push", "exercises": str(self.ex.id)}
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_same_name_different_users_allowed(self):
+        self.make_preset(self.bob, name="Push")
+        res = self.post_json(
+            reverse("api_preset_list_create"), {"name": "Push", "exercises": str(self.ex.id)}
+        )
+        self.assertEqual(res.status_code, 200)
+
+    def test_update_preset(self):
+        preset = self.make_preset(self.alice, name="Push")
+        res = self.put_json(
+            reverse("api_preset_detail", args=[preset.id]),
+            {"name": "Push v2", "exercises": f"{self.ex.id},{self.ex2.id}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        preset.refresh_from_db()
+        self.assertEqual(preset.name, "Push v2")
+        self.assertEqual(preset.exercises.count(), 2)
+
+    def test_update_to_own_other_existing_name_rejected(self):
+        self.make_preset(self.alice, name="Pull")
+        preset = self.make_preset(self.alice, name="Push")
+        res = self.put_json(
+            reverse("api_preset_detail", args=[preset.id]),
+            {"name": "Pull", "exercises": str(self.ex.id)},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_update_keeping_own_name_succeeds(self):
+        preset = self.make_preset(self.alice, name="Push")
+        res = self.put_json(
+            reverse("api_preset_detail", args=[preset.id]),
+            {"name": "Push", "exercises": str(self.ex.id)},
+        )
+        self.assertEqual(res.status_code, 200)
+
+    def test_delete_preset(self):
+        preset = self.make_preset(self.alice, name="Push")
+        res = self.client.delete(reverse("api_preset_detail", args=[preset.id]))
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(DayPreset.objects.filter(id=preset.id).exists())
+
+
+# --- Leaderboard ---
+
+class LeaderboardApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+        self.week_start = self.today - timedelta(days=self.today.weekday())
+        self.month_start = self.today.replace(day=1)
+        self.login_as(self.alice)
+
+    def test_ordering_and_counts(self):
+        self.make_day(self.alice, day_date=self.today)
+        self.make_day(self.alice, day_date=self.week_start)
+        # only count a "last month" day if it actually falls outside the current week
+        if self.month_start < self.week_start:
+            self.make_day(self.alice, day_date=self.month_start)
+
+        res = self.client.get(reverse("api_leaderboard"))
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        entries = {e["username"]: e for e in data["entries"]}
+
+        self.assertEqual(entries["alice"]["week_count"], 2)
+        expected_month = 3 if self.month_start < self.week_start else 2
+        self.assertEqual(entries["alice"]["month_count"], expected_month)
+        self.assertIn("bob", entries)
+        self.assertEqual(entries["bob"]["week_count"], 0)
+        self.assertEqual(data["entries"][0]["username"], "alice")
+
+    def test_superuser_excluded(self):
+        User.objects.create_superuser("admin", "admin@example.com", "pw12345")
+        res = self.client.get(reverse("api_leaderboard"))
+        usernames = [e["username"] for e in res.json()["entries"]]
+        self.assertNotIn("admin", usernames)
+
+
+# --- Chat ---
+
+class ChatApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login_as(self.alice)
+
+    def test_post_message(self):
+        res = self.post_json(reverse("api_chat"), {"text": "hello gang"})
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertEqual(data["username"], "alice")
+        self.assertEqual(data["text"], "hello gang")
+        self.assertIn("id", data)
+        self.assertIn("created_at", data)
+
+    def test_post_empty_message_rejected(self):
+        res = self.post_json(reverse("api_chat"), {"text": "   "})
+        self.assertEqual(res.status_code, 400)
+
+    def test_post_too_long_message_rejected(self):
+        res = self.post_json(reverse("api_chat"), {"text": "x" * 1001})
+        self.assertEqual(res.status_code, 400)
+
+    def test_get_returns_latest_50_ascending(self):
+        for i in range(60):
+            ChatMessage.objects.create(user=self.alice, text=f"msg {i}")
+        res = self.client.get(reverse("api_chat"))
+        data = res.json()
+        self.assertEqual(len(data), 50)
+        self.assertEqual(data[0]["text"], "msg 10")
+        self.assertEqual(data[-1]["text"], "msg 59")
+
+    def test_get_after_id(self):
+        msgs = [ChatMessage.objects.create(user=self.alice, text=f"msg {i}") for i in range(5)]
+        res = self.client.get(reverse("api_chat"), {"after": msgs[2].id})
+        data = res.json()
+        self.assertEqual([m["text"] for m in data], ["msg 3", "msg 4"])
+
+    def test_get_after_max_id_returns_empty(self):
+        msg = ChatMessage.objects.create(user=self.alice, text="only one")
+        res = self.client.get(reverse("api_chat"), {"after": msg.id})
+        self.assertEqual(res.json(), [])
+
+    def test_messages_visible_across_users(self):
+        ChatMessage.objects.create(user=self.bob, text="from bob")
+        res = self.client.get(reverse("api_chat"))
+        texts = [m["text"] for m in res.json()]
+        self.assertIn("from bob", texts)

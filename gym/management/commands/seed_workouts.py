@@ -1,5 +1,6 @@
 from datetime import date, timedelta
-from django.core.management.base import BaseCommand
+from django.contrib.auth.models import User
+from django.core.management.base import BaseCommand, CommandError
 from gym.models import Exercise, DayPreset, DayPresetExercise, WorkoutDay, WorkoutExercise, WorkoutSet
 
 PUSH_EXERCISES = [
@@ -81,19 +82,26 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--clear", action="store_true", help="Clear existing dummy data first")
+        parser.add_argument("--user", type=str, default="user", help="Username to seed data for")
 
     def handle(self, *args, **options):
+        username = options["user"]
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            raise CommandError(f"User '{username}' does not exist.")
+
         if options["clear"]:
-            WorkoutSet.objects.all().delete()
-            WorkoutExercise.objects.all().delete()
-            WorkoutDay.objects.all().delete()
-            DayPresetExercise.objects.all().delete()
-            DayPreset.objects.all().delete()
-            self.stdout.write("Cleared existing data.")
+            WorkoutSet.objects.filter(workout_exercise__workout_day__user=user).delete()
+            WorkoutExercise.objects.filter(workout_day__user=user).delete()
+            WorkoutDay.objects.filter(user=user).delete()
+            DayPresetExercise.objects.filter(preset__user=user).delete()
+            DayPreset.objects.filter(user=user).delete()
+            self.stdout.write(f"Cleared existing data for '{username}'.")
 
         preset_map = {}
         for name in PRESET_DEFS:
-            preset, created = DayPreset.objects.get_or_create(name=name)
+            preset, created = DayPreset.objects.get_or_create(name=name, user=user)
             preset_map[name] = preset
             if created:
                 self.stdout.write(f"  Created preset: {name}")
@@ -112,7 +120,7 @@ class Command(BaseCommand):
         for preset_name, notes, exercises, offset in WORKOUTS:
             day_date = today - timedelta(days=offset)
             preset = preset_map.get(preset_name)
-            day = WorkoutDay.objects.create(date=day_date, preset=preset, notes=notes)
+            day = WorkoutDay.objects.create(date=day_date, preset=preset, notes=notes, user=user)
 
             for order, (ex_name, sets) in enumerate(exercises, start=1):
                 try:
@@ -130,5 +138,5 @@ class Command(BaseCommand):
 
             self.stdout.write(f"  Created workout: {day_date} - {preset_name} ({len(exercises)} exercises)")
 
-        total = WorkoutDay.objects.count()
-        self.stdout.write(self.style.SUCCESS(f"Done. {total} workout days in the database."))
+        total = WorkoutDay.objects.filter(user=user).count()
+        self.stdout.write(self.style.SUCCESS(f"Done. {total} workout days for '{username}'."))

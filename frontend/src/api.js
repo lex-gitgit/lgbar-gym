@@ -24,9 +24,12 @@ async function request(path, options = {}) {
     ...options,
   };
   const res = await fetch(BASE + path, config);
-  if (res.status === 401) {
+  // /me/ is used to probe auth state on load; App.jsx already handles its
+  // failure gracefully, so redirecting here would cause a reload loop for
+  // anyone who isn't logged in yet.
+  if ((res.status === 401 || res.status === 403) && path !== "/me/") {
     window.location.href = "/";
-    throw new ApiError("Unauthorized", 401);
+    throw new ApiError("Unauthorized", res.status);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
