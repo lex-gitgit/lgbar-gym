@@ -13,6 +13,11 @@ const BODY_PART_LABELS = {
   cardio: "Cardio",
 };
 
+function todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function daysAgoLabel(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   const now = new Date();
@@ -33,13 +38,14 @@ export default function DayCreate({ showFlash }) {
   const [presetExercises, setPresetExercises] = useState({});
   const [days, setDays] = useState([]);
   const [selected, setSelected] = useState(new Set());
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayLocal());
   const [presetId, setPresetId] = useState(searchParams.get("preset") || "");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState("");
   const [showCustom, setShowCustom] = useState(() => Boolean(searchParams.get("preset")));
   const [quickLoggingId, setQuickLoggingId] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const filtered = useMemo(() => {
     if (!search) return exercises;
@@ -81,7 +87,10 @@ export default function DayCreate({ showFlash }) {
             pe[p.id] = d.exercises.map((e) => e.exercise);
           })
         )
-      ).then(() => setPresetExercises(pe));
+      ).then(() => {
+        setPresetExercises(pe);
+        setLoading(false);
+      });
     });
   }, []);
 
@@ -107,7 +116,7 @@ export default function DayCreate({ showFlash }) {
     setQuickLoggingId(preset.id);
     try {
       const data = await api.post(`/presets/${preset.id}/quick-log/`, {
-        date: new Date().toISOString().slice(0, 10),
+        date: todayLocal(),
       });
       showFlash(`"${preset.name}" logged — review your sets!`);
       navigate(`/day/${data.id}`);
@@ -139,6 +148,18 @@ export default function DayCreate({ showFlash }) {
       setSubmitting(false);
     }
   };
+
+  if (loading) {
+    return (
+      <>
+        <div className="page-header">
+          <h1>Log Workout</h1>
+        </div>
+        <div className="skeleton skeleton-text" style={{ height: 32, width: 180, marginBottom: 24 }} />
+        <div className="skeleton skeleton-card" />
+      </>
+    );
+  }
 
   return (
     <>
