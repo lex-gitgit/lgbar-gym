@@ -1,5 +1,7 @@
 import json
+from collections import defaultdict
 from datetime import date, timedelta
+from decimal import Decimal
 
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
@@ -89,6 +91,16 @@ def exercise_list(request):
 @api_view(["DELETE"])
 def exercise_delete(request, exercise_id):
     exercise = get_object_or_404(Exercise, id=exercise_id)
+    if WorkoutExercise.objects.filter(exercise=exercise).exists():
+        return Response(
+            {"error": "This exercise is logged in workout history and can't be deleted."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if DayPresetExercise.objects.filter(exercise=exercise).exists():
+        return Response(
+            {"error": "This exercise is used in a preset and can't be deleted."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     exercise.delete()
     return Response({"ok": True})
 
@@ -271,15 +283,43 @@ def preset_detail(request, preset_id):
 
 # --- Leaderboard ---
 
+BIG_LIFTS = ["Bench Press", "Squat", "Deadlift", "Overhead Press"]
+LB_TO_KG = Decimal("0.453592")
+
+
+def _to_kg(weight, weight_unit):
+    return weight if weight_unit == WorkoutSet.KG else weight * LB_TO_KG
+
+
+def _best_prs(exercise_ids, user_ids):
+    """All-time best estimated 1RM (Epley) per user per exercise, among the
+    given exercises/users. Returns {user_id: {exercise_name: {weight_kg, reps, e1rm}}}
+    with Decimal values — callers convert to float/round at the response boundary."""
+    sets = WorkoutSet.objects.filter(
+        workout_exercise__exercise_id__in=exercise_ids,
+        workout_exercise__workout_day__user_id__in=user_ids,
+    ).select_related("workout_exercise__exercise", "workout_exercise__workout_day")
+
+    pr_by_user = defaultdict(dict)
+    for s in sets:
+        uid = s.workout_exercise.workout_day.user_id
+        name = s.workout_exercise.exercise.name
+        kg = _to_kg(s.weight, s.weight_unit)
+        e1rm = kg * (Decimal("1") + Decimal(s.reps) / Decimal("30"))
+        current = pr_by_user[uid].get(name)
+        if current is None or e1rm > current["e1rm"]:
+            pr_by_user[uid][name] = {"weight_kg": kg, "reps": s.reps, "e1rm": e1rm}
+    return pr_by_user
+
+
 @api_view(["GET"])
 def leaderboard(request):
     today = timezone.localdate()
     week_start = today - timedelta(days=today.weekday())
     month_start = today.replace(day=1)
 
-    users = (
-        User.objects.filter(is_active=True, is_superuser=False)
-        .annotate(
+    users = list(
+        User.objects.filter(is_active=True, is_superuser=False).annotate(
             week_count=Count(
                 "workout_days", filter=Q(workout_days__date__gte=week_start), distinct=True
             ),
@@ -287,23 +327,94 @@ def leaderboard(request):
                 "workout_days", filter=Q(workout_days__date__gte=month_start), distinct=True
             ),
         )
-        .order_by("-week_count", "-month_count", "username")
     )
+    user_ids = [u.id for u in users]
+
+    # Volume this week (kg), normalized across weight units.
+    week_sets = WorkoutSet.objects.filter(
+        workout_exercise__workout_day__user_id__in=user_ids,
+        workout_exercise__workout_day__date__gte=week_start,
+    ).select_related("workout_exercise__workout_day")
+
+    volume_by_user = defaultdict(Decimal)
+    for s in week_sets:
+        uid = s.workout_exercise.workout_day.user_id
+        volume_by_user[uid] += _to_kg(s.weight, s.weight_unit) * s.reps
+
+    # All-time best estimated 1RM (Epley) per user per big lift.
+    big_lift_ids = Exercise.objects.filter(name__in=BIG_LIFTS).values_list("id", flat=True)
+    pr_by_user = _best_prs(big_lift_ids, user_ids)
+
+    # Longest current streak of consecutive weeks (including this week) with a workout.
+    weeks_by_user = defaultdict(set)
+    for uid, day_date in WorkoutDay.objects.filter(user_id__in=user_ids).values_list(
+        "user_id", "date"
+    ):
+        weeks_by_user[uid].add(day_date - timedelta(days=day_date.weekday()))
+
+    def streak_for(uid):
+        streak = 0
+        cursor = week_start
+        while cursor in weeks_by_user.get(uid, ()):
+            streak += 1
+            cursor -= timedelta(days=7)
+        return streak
+
+    entries = [
+        {
+            "username": u.username,
+            "week_count": u.week_count,
+            "month_count": u.month_count,
+            "week_volume_kg": round(float(volume_by_user.get(u.id, 0)), 1),
+            "streak_weeks": streak_for(u.id),
+            "prs": {
+                name: {
+                    "weight_kg": round(float(pr["weight_kg"]), 1),
+                    "reps": pr["reps"],
+                    "e1rm": round(float(pr["e1rm"]), 1),
+                }
+                for name, pr in pr_by_user.get(u.id, {}).items()
+            },
+        }
+        for u in users
+    ]
+    entries.sort(key=lambda e: (-e["week_count"], -e["month_count"], e["username"]))
 
     return Response(
         {
             "week_start": week_start,
             "month_start": month_start,
-            "entries": [
-                {
-                    "username": u.username,
-                    "week_count": u.week_count,
-                    "month_count": u.month_count,
-                }
-                for u in users
-            ],
+            "big_lifts": BIG_LIFTS,
+            "entries": entries,
         }
     )
+
+
+@api_view(["GET"])
+def leaderboard_exercise(request, exercise_id):
+    try:
+        exercise = Exercise.objects.get(id=exercise_id)
+    except Exercise.DoesNotExist:
+        raise NotFound()
+
+    user_ids = list(
+        User.objects.filter(is_active=True, is_superuser=False).values_list("id", flat=True)
+    )
+    pr_by_user = _best_prs([exercise.id], user_ids)
+    usernames = dict(User.objects.filter(id__in=pr_by_user.keys()).values_list("id", "username"))
+
+    entries = [
+        {
+            "username": usernames[uid],
+            "weight_kg": round(float(prs[exercise.name]["weight_kg"]), 1),
+            "reps": prs[exercise.name]["reps"],
+            "e1rm": round(float(prs[exercise.name]["e1rm"]), 1),
+        }
+        for uid, prs in pr_by_user.items()
+    ]
+    entries.sort(key=lambda e: -e["e1rm"])
+
+    return Response({"exercise": {"id": exercise.id, "name": exercise.name}, "entries": entries})
 
 
 # --- Chat ---

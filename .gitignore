@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 db.sqlite3
+db.sqlite3-wal
+db.sqlite3-shm
 db.sqlite3.bak
 node_modules/
 *.log
@@ -11,3 +13,6 @@ node_modules/
 
 # collectstatic output — regenerated on deploy
 staticfiles/
+
+# DB snapshots from backup_db — never commit these, they contain user data
+backups/

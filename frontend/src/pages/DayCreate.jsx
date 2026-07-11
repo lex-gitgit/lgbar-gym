@@ -146,17 +146,16 @@ export default function DayCreate({ showFlash }) {
                 <h3 className="body-part-heading">{BODY_PART_LABELS[part] || part}</h3>
                 <div className="exercise-list">
                   {exs.map((ex) => (
-                    <div key={ex.id}
+                    <button
+                      type="button"
+                      key={ex.id}
                       className={`exercise-chip ${selected.has(ex.id) ? "selected" : ""}`}
                       onClick={() => toggle(ex.id)}
-                      role="checkbox"
-                      aria-checked={selected.has(ex.id)}
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(ex.id); } }}
+                      aria-pressed={selected.has(ex.id)}
                     >
                       <span>{ex.name}</span>
                       <span className="body-part-badge">{ex.body_part}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -166,20 +165,22 @@ export default function DayCreate({ showFlash }) {
           )}
         </div>
 
-        {selected.size > 0 && (
-          <div className="card">
-            <h2>Selected Exercises</h2>
-            {Array.from(selected).map((id) => {
+        <div className="card">
+          <h2>Selected Exercises</h2>
+          {selected.size > 0 ? (
+            Array.from(selected).map((id) => {
               const ex = exercises.find((e) => e.id === id);
               return (
-                <div className="exercise-chip flex-between mb-md" style={{ marginBottom: "4px" }} key={id}>
+                <div className="exercise-chip flex-between" style={{ marginBottom: "4px", cursor: "default" }} key={id}>
                   <span>{ex ? ex.name : id}</span>
-                  <span className="text-muted" style={{ cursor: "pointer" }} onClick={() => toggle(id)}>✕</span>
+                  <button type="button" className="chip-remove" onClick={() => toggle(id)} aria-label={`Remove ${ex ? ex.name : "exercise"}`}>✕</button>
                 </div>
               );
-            })}
-          </div>
-        )}
+            })
+          ) : (
+            <p className="text-muted">No exercises selected yet — tap any above to add it.</p>
+          )}
+        </div>
       </form>
     </>
   );

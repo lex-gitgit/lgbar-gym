@@ -74,35 +74,36 @@ export default function PresetForm({ showFlash }) {
           <h2>Exercises</h2>
           <div className="exercise-list">
               {exercises.map((ex) => (
-              <div key={ex.id}
+              <button
+                type="button"
+                key={ex.id}
                 className={`exercise-chip ${selected.has(ex.id) ? "selected" : ""}`}
                 onClick={() => toggle(ex.id)}
-                role="checkbox"
-                aria-checked={selected.has(ex.id)}
-                tabIndex={0}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(ex.id); } }}
+                aria-pressed={selected.has(ex.id)}
               >
                 <span>{ex.name}</span>
                 <span className="body-part-badge">{ex.body_part}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
 
-        {selected.size > 0 && (
-          <div className="card" id="selectedContainer">
-            <h2>Selected</h2>
-            {Array.from(selected).map((sid) => {
+        <div className="card" id="selectedContainer">
+          <h2>Selected</h2>
+          {selected.size > 0 ? (
+            Array.from(selected).map((sid) => {
               const ex = exercises.find((e) => e.id === sid);
               return (
-                <div className="exercise-chip flex-between mb-md" style={{ marginBottom: "4px" }} key={sid}>
+                <div className="exercise-chip flex-between" style={{ marginBottom: "4px", cursor: "default" }} key={sid}>
                   <span>{ex ? ex.name : sid}</span>
-                  <span className="text-muted" style={{ cursor: "pointer" }} onClick={() => toggle(sid)}>✕</span>
+                  <button type="button" className="chip-remove" onClick={() => toggle(sid)} aria-label={`Remove ${ex ? ex.name : "exercise"}`}>✕</button>
                 </div>
               );
-            })}
-          </div>
-        )}
+            })
+          ) : (
+            <p className="text-muted">No exercises selected yet — tap any above to add it.</p>
+          )}
+        </div>
 
         <button type="submit" className="btn btn-primary w-full" style={{ padding: "14px" }} disabled={submitting}>
           {submitting ? <><span className="spinner spinner--white" /> Saving…</> : "Save Preset"}

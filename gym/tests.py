@@ -176,6 +176,7 @@ class AuthGatingTests(ApiTestCase):
             ("get", reverse("api_preset_list_create")),
             ("get", reverse("api_preset_detail", args=[preset.id])),
             ("get", reverse("api_leaderboard")),
+            ("get", reverse("api_leaderboard_exercise", args=[self.ex.id])),
             ("get", reverse("api_chat")),
         ]
         for method, url in endpoints:
@@ -222,6 +223,32 @@ class ExerciseApiTests(ApiTestCase):
         res = self.client.delete(reverse("api_exercise_delete", args=[ex.id]))
         self.assertEqual(res.status_code, 200)
         self.assertFalse(Exercise.objects.filter(id=ex.id).exists())
+
+    def test_delete_exercise_used_in_workout_is_blocked(self):
+        ex = Exercise.objects.create(name=EX_GAMMA)
+        day = self.make_day(self.alice)
+        WorkoutExercise.objects.create(workout_day=day, exercise=ex, order=0)
+        res = self.client.delete(reverse("api_exercise_delete", args=[ex.id]))
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(Exercise.objects.filter(id=ex.id).exists())
+
+    def test_delete_exercise_used_in_workout_by_other_user_is_blocked(self):
+        # Deletion must be blocked even if the logging user isn't the requester —
+        # the exercise catalog is shared, so any friend's history can be affected.
+        ex = Exercise.objects.create(name=EX_GAMMA)
+        day = self.make_day(self.bob)
+        WorkoutExercise.objects.create(workout_day=day, exercise=ex, order=0)
+        res = self.client.delete(reverse("api_exercise_delete", args=[ex.id]))
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(Exercise.objects.filter(id=ex.id).exists())
+
+    def test_delete_exercise_used_in_preset_is_blocked(self):
+        ex = Exercise.objects.create(name=EX_GAMMA)
+        preset = self.make_preset(self.alice)
+        DayPresetExercise.objects.create(preset=preset, exercise=ex, order=0)
+        res = self.client.delete(reverse("api_exercise_delete", args=[ex.id]))
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(Exercise.objects.filter(id=ex.id).exists())
 
 
 # --- Workout days ---
@@ -494,6 +521,103 @@ class LeaderboardApiTests(ApiTestCase):
         res = self.client.get(reverse("api_leaderboard"))
         usernames = [e["username"] for e in res.json()["entries"]]
         self.assertNotIn("admin", usernames)
+
+    def test_week_volume_normalizes_units(self):
+        day = self.make_day(self.alice, day_date=self.today)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=10, weight=50, weight_unit="kg")
+        WorkoutSet.objects.create(workout_exercise=we, set_number=2, reps=5, weight=100, weight_unit="lbs")
+
+        res = self.client.get(reverse("api_leaderboard"))
+        entries = {e["username"]: e for e in res.json()["entries"]}
+        # 50kg*10 + (100lbs->45.3592kg)*5 = 500 + 226.796 = 726.8 (rounded)
+        self.assertAlmostEqual(entries["alice"]["week_volume_kg"], 726.8, places=1)
+        self.assertEqual(entries["bob"]["week_volume_kg"], 0)
+
+    def test_volume_excludes_sets_outside_this_week(self):
+        day = self.make_day(self.alice, day_date=self.week_start - timedelta(days=1))
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=10, weight=999, weight_unit="kg")
+
+        res = self.client.get(reverse("api_leaderboard"))
+        entries = {e["username"]: e for e in res.json()["entries"]}
+        self.assertEqual(entries["alice"]["week_volume_kg"], 0)
+
+    def test_streak_counts_consecutive_weeks_and_stops_at_gap(self):
+        for weeks_ago in (0, 1, 2):
+            self.make_day(self.alice, day_date=self.week_start - timedelta(weeks=weeks_ago))
+        # gap at weeks_ago=3, then an older, non-contiguous workout
+        self.make_day(self.alice, day_date=self.week_start - timedelta(weeks=4))
+
+        res = self.client.get(reverse("api_leaderboard"))
+        entries = {e["username"]: e for e in res.json()["entries"]}
+        self.assertEqual(entries["alice"]["streak_weeks"], 3)
+        self.assertEqual(entries["bob"]["streak_weeks"], 0)
+
+    def test_big_lift_prs_picks_best_e1rm(self):
+        bench = Exercise.objects.get(name="Bench Press")
+        day = self.make_day(self.alice, day_date=self.today)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=bench, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=10, weight=80, weight_unit="kg")
+        WorkoutSet.objects.create(workout_exercise=we, set_number=2, reps=5, weight=100, weight_unit="kg")
+
+        res = self.client.get(reverse("api_leaderboard"))
+        entries = {e["username"]: e for e in res.json()["entries"]}
+        pr = entries["alice"]["prs"]["Bench Press"]
+        # 100kg x5 -> e1rm 116.7 beats 80kg x10 -> e1rm 106.7
+        self.assertEqual(pr["weight_kg"], 100.0)
+        self.assertEqual(pr["reps"], 5)
+        self.assertAlmostEqual(pr["e1rm"], 116.7, places=1)
+        self.assertEqual(entries["bob"]["prs"], {})
+
+    def test_big_lifts_list_in_response(self):
+        res = self.client.get(reverse("api_leaderboard"))
+        self.assertEqual(
+            res.json()["big_lifts"],
+            ["Bench Press", "Squat", "Deadlift", "Overhead Press"],
+        )
+
+
+class LeaderboardExerciseApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login_as(self.alice)
+
+    def test_ranks_users_by_best_e1rm(self):
+        alice_day = self.make_day(self.alice)
+        alice_we = WorkoutExercise.objects.create(workout_day=alice_day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=alice_we, set_number=1, reps=5, weight=100, weight_unit="kg")
+
+        bob_day = self.make_day(self.bob)
+        bob_we = WorkoutExercise.objects.create(workout_day=bob_day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=bob_we, set_number=1, reps=8, weight=120, weight_unit="kg")
+
+        res = self.client.get(reverse("api_leaderboard_exercise", args=[self.ex.id]))
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["exercise"], {"id": self.ex.id, "name": EX_ALPHA})
+        # bob: 120kg x8 -> e1rm 152.0 beats alice: 100kg x5 -> e1rm 116.7
+        self.assertEqual([e["username"] for e in data["entries"]], ["bob", "alice"])
+        self.assertAlmostEqual(data["entries"][0]["e1rm"], 152.0, places=1)
+
+    def test_picks_best_set_not_most_recent(self):
+        day = self.make_day(self.alice)
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=5, weight=100, weight_unit="kg")
+        WorkoutSet.objects.create(workout_exercise=we, set_number=2, reps=3, weight=60, weight_unit="kg")
+
+        res = self.client.get(reverse("api_leaderboard_exercise", args=[self.ex.id]))
+        entries = res.json()["entries"]
+        self.assertEqual(entries[0]["weight_kg"], 100.0)
+
+    def test_excludes_users_who_havent_logged_it(self):
+        self.make_day(self.alice)  # no exercise logged
+        res = self.client.get(reverse("api_leaderboard_exercise", args=[self.ex.id]))
+        self.assertEqual(res.json()["entries"], [])
+
+    def test_unknown_exercise_404s(self):
+        res = self.client.get(reverse("api_leaderboard_exercise", args=[999999]))
+        self.assertEqual(res.status_code, 404)
 
 
 # --- Chat ---

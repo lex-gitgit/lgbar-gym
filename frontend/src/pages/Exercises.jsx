@@ -59,9 +59,13 @@ function CatalogueTab({ showFlash }) {
 
   const handleDelete = async (id, n) => {
     if (!confirm(`Delete ${n}?`)) return;
-    await api.del(`/exercises/${id}/`);
-    showFlash(`"${n}" deleted.`);
-    load();
+    try {
+      await api.del(`/exercises/${id}/`);
+      showFlash(`"${n}" deleted.`);
+      load();
+    } catch (err) {
+      showFlash(err.message || "Couldn't delete exercise.", "error");
+    }
   };
 
   return (
