@@ -398,6 +398,13 @@ class UserScopingTests(ApiTestCase):
         self.assertEqual(res.status_code, 404)
         self.assertTrue(DayPreset.objects.filter(id=self.alice_preset.id).exists())
 
+    def test_cannot_quick_log_foreign_preset(self):
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[self.alice_preset.id]), {"date": "2026-02-01"}
+        )
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(WorkoutDay.objects.filter(preset=self.alice_preset).count(), 0)
+
     def test_day_list_excludes_foreign_days(self):
         self.make_day(self.bob, notes="bob's day")
         res = self.client.get(reverse("api_day_list_create"))
@@ -485,6 +492,100 @@ class PresetApiTests(ApiTestCase):
         res = self.client.delete(reverse("api_preset_detail", args=[preset.id]))
         self.assertEqual(res.status_code, 200)
         self.assertFalse(DayPreset.objects.filter(id=preset.id).exists())
+
+
+class PresetQuickLogApiTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login_as(self.alice)
+
+    def test_quick_log_creates_day_with_no_history(self):
+        preset = self.make_preset(self.alice, name="Push")
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex, order=0)
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex2, order=1)
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[preset.id]), {"date": "2026-02-01"}
+        )
+        self.assertEqual(res.status_code, 200)
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        self.assertEqual(day.user, self.alice)
+        self.assertEqual(day.preset, preset)
+        self.assertEqual(
+            list(day.exercises.order_by("order").values_list("exercise_id", flat=True)),
+            [self.ex.id, self.ex2.id],
+        )
+        for we in day.exercises.all():
+            self.assertEqual(we.sets.count(), 0)
+
+    def test_quick_log_copies_forward_last_sets(self):
+        preset = self.make_preset(self.alice, name="Push")
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex, order=0)
+        old_day = self.make_day(self.alice, day_date=date(2026, 1, 1))
+        old_we = WorkoutExercise.objects.create(workout_day=old_day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=old_we, set_number=1, reps=8, weight=60)
+        WorkoutSet.objects.create(workout_exercise=old_we, set_number=2, reps=6, weight=65)
+
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[preset.id]), {"date": "2026-02-01"}
+        )
+        self.assertEqual(res.status_code, 200)
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        sets = list(day.exercises.get(exercise=self.ex).sets.order_by("set_number"))
+        self.assertEqual(len(sets), 2)
+        self.assertEqual(sets[0].reps, 8)
+        self.assertEqual(float(sets[0].weight), 60.0)
+        self.assertEqual(sets[1].reps, 6)
+
+    def test_quick_log_uses_most_recent_occurrence(self):
+        preset = self.make_preset(self.alice, name="Push")
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex, order=0)
+        day1 = self.make_day(self.alice, day_date=date(2026, 1, 1))
+        we1 = WorkoutExercise.objects.create(workout_day=day1, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we1, set_number=1, reps=10, weight=40)
+        day2 = self.make_day(self.alice, day_date=date(2026, 1, 15))
+        we2 = WorkoutExercise.objects.create(workout_day=day2, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we2, set_number=1, reps=5, weight=80)
+
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[preset.id]), {"date": "2026-02-01"}
+        )
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        we = day.exercises.get(exercise=self.ex)
+        self.assertEqual(we.sets.count(), 1)
+        self.assertEqual(float(we.sets.first().weight), 80.0)
+
+    def test_quick_log_skips_empty_prior_occurrence(self):
+        preset = self.make_preset(self.alice, name="Push")
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex, order=0)
+        # Exercise was added to an earlier day but no sets were ever logged for it.
+        empty_day = self.make_day(self.alice, day_date=date(2026, 1, 10))
+        WorkoutExercise.objects.create(workout_day=empty_day, exercise=self.ex, order=0)
+        real_day = self.make_day(self.alice, day_date=date(2026, 1, 1))
+        real_we = WorkoutExercise.objects.create(workout_day=real_day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=real_we, set_number=1, reps=12, weight=30)
+
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[preset.id]), {"date": "2026-02-01"}
+        )
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        we = day.exercises.get(exercise=self.ex)
+        self.assertEqual(we.sets.count(), 1)
+        self.assertEqual(we.sets.first().reps, 12)
+
+    def test_quick_log_empty_preset_rejected(self):
+        preset = self.make_preset(self.alice, name="Empty")
+        res = self.post_json(
+            reverse("api_preset_quick_log", args=[preset.id]), {"date": "2026-02-01"}
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_quick_log_defaults_to_today(self):
+        preset = self.make_preset(self.alice, name="Push")
+        DayPresetExercise.objects.create(preset=preset, exercise=self.ex, order=0)
+        res = self.post_json(reverse("api_preset_quick_log", args=[preset.id]), {})
+        self.assertEqual(res.status_code, 200)
+        day = WorkoutDay.objects.get(id=res.json()["id"])
+        self.assertEqual(day.date, date.today())
 
 
 # --- Leaderboard ---

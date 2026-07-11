@@ -281,6 +281,52 @@ def preset_detail(request, preset_id):
     return Response(DayPresetDetailSerializer(preset).data)
 
 
+@api_view(["POST"])
+def preset_quick_log(request, preset_id):
+    """Create a new WorkoutDay from a preset in one tap, pre-filling each
+    exercise with the sets from the last time it was logged (regardless of
+    which day/preset that was), so the user only has to edit what changed."""
+    preset = get_object_or_404(DayPreset, id=preset_id, user=request.user)
+    preset_exercises = list(preset.exercises.select_related("exercise"))
+    if not preset_exercises:
+        return Response(
+            {"error": "This preset has no exercises."}, status=status.HTTP_400_BAD_REQUEST
+        )
+
+    day_date = request.data.get("date") or date.today().isoformat()
+
+    with transaction.atomic():
+        day = WorkoutDay.objects.create(
+            date=day_date, preset=preset, notes="", user=request.user
+        )
+        for dpe in preset_exercises:
+            we = WorkoutExercise.objects.create(
+                workout_day=day, exercise=dpe.exercise, order=dpe.order
+            )
+            last_we = (
+                WorkoutExercise.objects.filter(
+                    exercise=dpe.exercise, workout_day__user=request.user
+                )
+                .exclude(workout_day_id=day.id)
+                .annotate(set_count=Count("sets"))
+                .filter(set_count__gt=0)
+                .order_by("-workout_day__date", "-workout_day__created_at", "-id")
+                .prefetch_related("sets")
+                .first()
+            )
+            if last_we:
+                for s in last_we.sets.all():
+                    WorkoutSet.objects.create(
+                        workout_exercise=we,
+                        set_number=s.set_number,
+                        reps=s.reps,
+                        weight=s.weight,
+                        weight_unit=s.weight_unit,
+                    )
+
+    return Response({"id": day.id})
+
+
 # --- Leaderboard ---
 
 BIG_LIFTS = ["Bench Press", "Squat", "Deadlift", "Overhead Press"]

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import { api } from "../api";
 
 const POLL_INTERVAL = 5000;
@@ -16,6 +16,7 @@ export default function Chat({ user, showFlash }) {
 
   const lastIdRef = useRef(0);
   const listRef = useRef(null);
+  const didInitialScrollRef = useRef(false);
 
   const isNearBottom = useCallback(() => {
     const el = listRef.current;
@@ -47,7 +48,6 @@ export default function Chat({ user, showFlash }) {
       setMessages(data);
       if (data.length) lastIdRef.current = data[data.length - 1].id;
       setLoading(false);
-      requestAnimationFrame(scrollToBottom);
     }).catch(() => setLoading(false));
 
     const poll = () => {
@@ -65,6 +65,14 @@ export default function Chat({ user, showFlash }) {
       clearInterval(interval);
     };
   }, [appendMessages, isNearBottom, scrollToBottom]);
+
+  // Jump to the latest message before the first paint, so chat never flashes open at the top.
+  useLayoutEffect(() => {
+    if (!loading && !didInitialScrollRef.current) {
+      scrollToBottom();
+      didInitialScrollRef.current = true;
+    }
+  }, [loading, scrollToBottom]);
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -85,48 +93,46 @@ export default function Chat({ user, showFlash }) {
 
   return (
     <>
-      <div className="page-header">
+      <div className="chat-page-header">
         <h1>Chat</h1>
       </div>
 
-      <div className="card chat-card">
-        <div className="chat-messages" ref={listRef}>
-          {loading ? (
-            <div className="skeleton skeleton-card" />
-          ) : messages.length === 0 ? (
-            <div className="empty-state">
-              <p>No messages yet. Say hello!</p>
-            </div>
-          ) : (
-            messages.map((m) => {
-              const own = m.username === user;
-              return (
-                <div key={m.id} className={`chat-message ${own ? "chat-message--own" : ""}`}>
-                  <div className="chat-message-meta">
-                    <strong>{m.username}</strong>
-                    <span className="text-muted">{formatTime(m.created_at)}</span>
-                  </div>
-                  <div className="chat-message-bubble">{m.text}</div>
+      <div className="chat-messages" ref={listRef}>
+        {loading ? (
+          <div className="skeleton skeleton-card" />
+        ) : messages.length === 0 ? (
+          <div className="empty-state">
+            <p>No messages yet. Say hello!</p>
+          </div>
+        ) : (
+          messages.map((m) => {
+            const own = m.username === user;
+            return (
+              <div key={m.id} className={`chat-message ${own ? "chat-message--own" : ""}`}>
+                <div className="chat-message-meta">
+                  <strong>{m.username}</strong>
+                  <span className="text-muted">{formatTime(m.created_at)}</span>
                 </div>
-              );
-            })
-          )}
-        </div>
-
-        <form className="chat-input-row" onSubmit={handleSend}>
-          <input
-            type="text"
-            placeholder="Type a message..."
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            maxLength={1000}
-            disabled={sending}
-          />
-          <button type="submit" className="btn btn-primary" disabled={sending || !text.trim()}>
-            Send
-          </button>
-        </form>
+                <div className="chat-message-bubble">{m.text}</div>
+              </div>
+            );
+          })
+        )}
       </div>
+
+      <form className="chat-input-row" onSubmit={handleSend}>
+        <input
+          type="text"
+          placeholder="Type a message..."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          maxLength={1000}
+          disabled={sending}
+        />
+        <button type="submit" className="btn btn-primary" disabled={sending || !text.trim()}>
+          Send
+        </button>
+      </form>
     </>
   );
 }

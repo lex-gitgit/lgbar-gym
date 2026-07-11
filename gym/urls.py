@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/sets/<int:set_id>/delete/", api_views.set_delete, name="api_set_delete"),
     path("api/presets/", api_views.preset_list_create, name="api_preset_list_create"),
     path("api/presets/<int:preset_id>/", api_views.preset_detail, name="api_preset_detail"),
+    path("api/presets/<int:preset_id>/quick-log/", api_views.preset_quick_log, name="api_preset_quick_log"),
     path("api/leaderboard/", api_views.leaderboard, name="api_leaderboard"),
     path("api/leaderboard/exercise/<int:exercise_id>/", api_views.leaderboard_exercise, name="api_leaderboard_exercise"),
     path("api/chat/", api_views.chat_list_create, name="api_chat"),

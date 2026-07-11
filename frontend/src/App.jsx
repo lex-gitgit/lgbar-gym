@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { api } from "./api";
 import Sidebar from "./components/Sidebar";
 
@@ -36,6 +36,7 @@ function ProtectedRoute({ user, children }) {
 
 export default function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(null);
@@ -101,7 +102,7 @@ export default function App() {
       <MobileTopBar onMenuClick={() => setSidebarOpen(true)} onLogout={handleLogout} />
       <main className="main-content">
         <Suspense fallback={<PageLoading />}>
-          <div className="main-content-inner">
+          <div className={location.pathname === "/chat" ? "main-content-full" : "main-content-inner"}>
             <Routes>
               <Route path="/dashboard" element={<Dashboard showFlash={showFlash} />} />
               <Route path="/exercises" element={<Exercises showFlash={showFlash} />} />
