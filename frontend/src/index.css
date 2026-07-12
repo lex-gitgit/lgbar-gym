@@ -780,6 +780,161 @@ select { cursor: pointer; }
   border-bottom: 1px solid var(--border);
 }
 
+/* Exercise picker (PresetForm + DayCreate) */
+.picker-search {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.picker-search input {
+  padding-right: 40px;
+}
+
+.picker-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 32px;
+  min-height: 32px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.picker-search-clear:hover {
+  color: var(--text);
+  background: var(--bg-card-hover);
+}
+
+.picker-filters {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.picker-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.picker-filter {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.picker-filter:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.picker-filter.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.picker-filter-count {
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+.picker-selected-bar {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.picker-selected-count {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.picker-selected-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.picker-selected-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.picker-selected-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--accent);
+  background: var(--accent-light);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.picker-selected-chip:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.picker-selected-hint {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.picker-group {
+  margin-bottom: 16px;
+}
+
+.exercise-chip-check {
+  color: var(--accent);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
 .set-add-form {
   display: flex;
   gap: 8px;
@@ -1517,6 +1672,20 @@ select { cursor: pointer; }
   .exercise-chip {
     padding: 10px 12px;
     min-height: 44px;
+  }
+
+  .picker-selected-bar {
+    top: calc(var(--topbar-height) + 8px);
+  }
+
+  .picker-filter {
+    min-height: 40px;
+    padding: 8px 14px;
+  }
+
+  .picker-selected-chip {
+    min-height: 40px;
+    padding: 6px 14px;
   }
 
   .form-row {

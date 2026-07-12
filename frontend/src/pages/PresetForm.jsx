@@ -1,17 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api";
-
-const BODY_PART_LABELS = {
-  chest: "Chest",
-  back: "Back",
-  shoulders: "Shoulders",
-  biceps: "Biceps",
-  triceps: "Triceps",
-  legs: "Legs",
-  core: "Core",
-  cardio: "Cardio",
-};
+import ExercisePicker from "../components/ExercisePicker";
 
 export default function PresetForm({ showFlash }) {
   const { id } = useParams();
@@ -22,23 +12,6 @@ export default function PresetForm({ showFlash }) {
   const [exercises, setExercises] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [submitting, setSubmitting] = useState(false);
-  const [search, setSearch] = useState("");
-
-  const filtered = useMemo(() => {
-    if (!search) return exercises;
-    const q = search.toLowerCase();
-    return exercises.filter((ex) => ex.name.toLowerCase().includes(q));
-  }, [exercises, search]);
-
-  const grouped = useMemo(() => {
-    const map = {};
-    for (const ex of filtered) {
-      const key = ex.body_part || "other";
-      if (!map[key]) map[key] = [];
-      map[key].push(ex);
-    }
-    return map;
-  }, [filtered]);
 
   useEffect(() => {
     api.get("/exercises/").then(setExercises);
@@ -100,50 +73,7 @@ export default function PresetForm({ showFlash }) {
 
         <div className="card">
           <h2>Exercises</h2>
-          <div style={{ marginBottom: 12 }}>
-            <input type="text" placeholder="Search exercises…"
-              value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          {Object.keys(grouped).length > 0 ? (
-            Object.entries(grouped).map(([part, exs]) => (
-              <div key={part} style={{ marginBottom: 16 }}>
-                <h3 className="body-part-heading">{BODY_PART_LABELS[part] || part}</h3>
-                <div className="exercise-list">
-                  {exs.map((ex) => (
-                    <button
-                      type="button"
-                      key={ex.id}
-                      className={`exercise-chip ${selected.has(ex.id) ? "selected" : ""}`}
-                      onClick={() => toggle(ex.id)}
-                      aria-pressed={selected.has(ex.id)}
-                    >
-                      <span>{ex.name}</span>
-                      <span className="body-part-badge">{ex.body_part}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="text-muted">No exercises found{search ? ` matching "${search}"` : ""}.</p>
-          )}
-        </div>
-
-        <div className="card" id="selectedContainer">
-          <h2>Selected</h2>
-          {selected.size > 0 ? (
-            Array.from(selected).map((sid) => {
-              const ex = exercises.find((e) => e.id === sid);
-              return (
-                <div className="exercise-chip flex-between" style={{ marginBottom: "4px", cursor: "default" }} key={sid}>
-                  <span>{ex ? ex.name : sid}</span>
-                  <button type="button" className="chip-remove" onClick={() => toggle(sid)} aria-label={`Remove ${ex ? ex.name : "exercise"}`}>✕</button>
-                </div>
-              );
-            })
-          ) : (
-            <p className="text-muted">No exercises selected yet — tap any above to add it.</p>
-          )}
+          <ExercisePicker exercises={exercises} selected={selected} onToggle={toggle} />
         </div>
 
         <button type="submit" className="btn btn-primary w-full" style={{ padding: "14px" }} disabled={submitting}>
