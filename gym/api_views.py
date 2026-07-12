@@ -583,6 +583,11 @@ def coach_chat(request):
         "messages": [{"role": "system", "content": system_prompt}] + cleaned,
         "max_tokens": 500,
     }
+    if settings.OPENROUTER_FALLBACK_MODELS:
+        # OpenRouter's native fallback routing: if the primary model's pool is
+        # rate-limited, it transparently serves from the next model instead of
+        # returning 429. "models" takes precedence over "model" when present.
+        payload["models"] = [settings.OPENROUTER_MODEL] + settings.OPENROUTER_FALLBACK_MODELS
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",

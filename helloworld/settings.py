@@ -41,6 +41,17 @@ ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(","
 # crashing the app.
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+# Free-tier model pools saturate independently and often, so Coach sends
+# OpenRouter a fallback chain (primary first) and lets their router pick the
+# first pool with capacity. Comma-separated; set to "" to disable fallbacks.
+OPENROUTER_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.environ.get(
+        "OPENROUTER_FALLBACK_MODELS",
+        "google/gemma-4-26b-a4b-it:free,meta-llama/llama-3.3-70b-instruct:free",
+    ).split(",")
+    if m.strip()
+]
 
 
 # Application definition

@@ -784,7 +784,11 @@ def _mock_openrouter_response(reply="Get back to your set.", status_code=200):
     return mock_resp
 
 
-@override_settings(OPENROUTER_API_KEY="test-key", OPENROUTER_MODEL="google/gemma-4-31b-it:free")
+@override_settings(
+    OPENROUTER_API_KEY="test-key",
+    OPENROUTER_MODEL="google/gemma-4-31b-it:free",
+    OPENROUTER_FALLBACK_MODELS=["fallback/model-a:free", "fallback/model-b:free"],
+)
 class CoachApiTests(ApiTestCase):
     def setUp(self):
         super().setUp()
@@ -796,6 +800,24 @@ class CoachApiTests(ApiTestCase):
         res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "how many sets?"}]})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["reply"], "Nice work, now go do another set.")
+
+    @patch("gym.api_views.requests.post")
+    def test_fallback_models_sent_when_configured(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        sent_payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(
+            sent_payload["models"],
+            ["google/gemma-4-31b-it:free", "fallback/model-a:free", "fallback/model-b:free"],
+        )
+
+    @override_settings(OPENROUTER_FALLBACK_MODELS=[])
+    @patch("gym.api_views.requests.post")
+    def test_no_fallback_models_when_disabled(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        sent_payload = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("models", sent_payload)
 
     @patch("gym.api_views.requests.post")
     def test_system_prompt_includes_username_and_workout_facts(self, mock_post):
