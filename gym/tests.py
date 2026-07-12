@@ -835,6 +835,32 @@ class CoachApiTests(ApiTestCase):
         self.assertEqual(sent_payload["model"], "google/gemma-4-31b-it:free")
 
     @patch("gym.api_views.requests.post")
+    def test_system_prompt_includes_set_details(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        day = self.make_day(self.alice, day_date=date.today())
+        we = WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+        WorkoutSet.objects.create(workout_exercise=we, set_number=2, reps=6, weight="62.50", weight_unit="kg")
+        WorkoutSet.objects.create(workout_exercise=we, set_number=1, reps=8, weight="60.00", weight_unit="kg")
+
+        self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "how did I do today?"}]})
+
+        system_content = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+        # Trimmed weights, sorted by set_number regardless of creation order.
+        self.assertIn(f"{self.ex.name}: 60kgx8, 62.5kgx6", system_content)
+        self.assertIn("Last workout: today.", system_content)
+
+    @patch("gym.api_views.requests.post")
+    def test_system_prompt_notes_exercise_without_sets(self, mock_post):
+        mock_post.return_value = _mock_openrouter_response()
+        day = self.make_day(self.alice, day_date=date.today())
+        WorkoutExercise.objects.create(workout_day=day, exercise=self.ex, order=0)
+
+        self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+
+        system_content = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+        self.assertIn(f"{self.ex.name}: added but no sets logged", system_content)
+
+    @patch("gym.api_views.requests.post")
     def test_history_truncated_to_20_messages(self, mock_post):
         mock_post.return_value = _mock_openrouter_response()
         history = [{"role": "user", "content": f"msg {i}"} for i in range(30)]

@@ -514,9 +514,15 @@ Personality:
 - Never give real medical diagnoses or claim to replace a doctor/physical therapist; for injury/pain questions, tell them to see a professional (bitchily) and give general safe guidance only.
 - If the user's question has nothing to do with fitness, gym, exercise, or nutrition, roast them for wasting your time and redirect them back to their workout.
 
-Here's what you actually know about {username}'s training, so use it to call them out specifically when relevant:
+Here's what you actually know about {username}'s training, including the set-by-set detail of their recent workouts. Use it to answer specific questions about how they did (e.g. "how was my workout today?") and to call them out when relevant:
 {workout_summary}
 """
+
+
+def _fmt_weight(weight):
+    # DecimalField renders "60.00" — trim to "60" (or "62.5") for prompt readability.
+    text = str(weight)
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _coach_workout_summary(user):
@@ -527,7 +533,7 @@ def _coach_workout_summary(user):
     recent_days = list(
         WorkoutDay.objects.filter(user=user)
         .select_related("preset")
-        .prefetch_related("exercises__exercise")[:3]
+        .prefetch_related("exercises__exercise", "exercises__sets")[:3]
     )
     if not recent_days:
         return "This user has never logged a single workout. They have no excuse."
@@ -540,11 +546,27 @@ def _coach_workout_summary(user):
     else:
         last_line = f"Last workout: {days_since} days ago ({recent_days[0].date.isoformat()})."
 
-    lines = [f"Workouts logged this week (since Monday): {week_count}.", last_line, "Recent workouts:"]
+    lines = [
+        f"Workouts logged this week (since Monday): {week_count}.",
+        last_line,
+        "Recent workouts, set by set (weight x reps):",
+    ]
     for day in recent_days:
         label = day.preset.name if day.preset else "Custom"
-        exercise_names = ", ".join(we.exercise.name for we in day.exercises.all())
-        lines.append(f"- {day.date.isoformat()} ({label}): {exercise_names or 'no exercises logged'}")
+        workout_exercises = day.exercises.all()
+        if not workout_exercises:
+            lines.append(f"- {day.date.isoformat()} ({label}): no exercises logged")
+            continue
+        lines.append(f"- {day.date.isoformat()} ({label}):")
+        for we in workout_exercises:
+            sets = sorted(we.sets.all(), key=lambda s: s.set_number)
+            if sets:
+                sets_str = ", ".join(
+                    f"{_fmt_weight(s.weight)}{s.weight_unit}x{s.reps}" for s in sets
+                )
+            else:
+                sets_str = "added but no sets logged"
+            lines.append(f"  - {we.exercise.name}: {sets_str}")
 
     return "\n".join(lines)
 
