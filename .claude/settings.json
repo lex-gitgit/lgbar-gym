@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -q 'frontend/src/' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"frontend/src/ was modified: before committing, run cd frontend && npm run build and stage the frontend/dist/ changes. The site deploys from committed dist — skipping the build ships stale JS/CSS.\"}}' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
