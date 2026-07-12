@@ -1,4 +1,5 @@
 import json
+import time
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -498,6 +499,12 @@ COACH_MAX_HISTORY = 20
 COACH_MAX_MESSAGE_LEN = 2000
 COACH_VALID_ROLES = {"user", "assistant"}
 
+# OpenRouter's free-model pool is shared and frequently 429s even well under
+# any per-account quota, so retry a couple of times before giving up. Backoff
+# is indexed by attempt number (last attempt never sleeps).
+COACH_MAX_ATTEMPTS = 3
+COACH_RETRY_BACKOFF = (0.8, 1.6)
+
 COACH_SYSTEM_PROMPT = """You are "Coach", a blunt, impatient, no-nonsense gym coach built into a workout-tracking app. You are talking to {username}.
 
 Personality:
@@ -571,47 +578,62 @@ def coach_chat(request):
         workout_summary=_coach_workout_summary(request.user),
     )
 
-    try:
-        resp = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "X-Title": "BIG MACS Coach",
-            },
-            json={
-                "model": settings.OPENROUTER_MODEL,
-                "messages": [{"role": "system", "content": system_prompt}] + cleaned,
-                "max_tokens": 500,
-            },
-            timeout=30,
-        )
-    except requests.RequestException:
-        return Response(
-            {"error": "Coach couldn't be reached. Try again in a bit."},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+    payload = {
+        "model": settings.OPENROUTER_MODEL,
+        "messages": [{"role": "system", "content": system_prompt}] + cleaned,
+        "max_tokens": 500,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "X-Title": "BIG MACS Coach",
+    }
 
-    if resp.status_code == 429:
-        return Response(
-            {"error": "Coach is busy. Do another set and ask again."},
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-    if not resp.ok:
-        return Response(
-            {"error": "Coach couldn't be reached. Try again in a bit."},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+    for attempt in range(COACH_MAX_ATTEMPTS):
+        is_last = attempt == COACH_MAX_ATTEMPTS - 1
 
-    try:
-        reply = resp.json()["choices"][0]["message"]["content"].strip()
-    except (ValueError, KeyError, IndexError, TypeError):
-        return Response(
-            {"error": "Coach couldn't be reached. Try again in a bit."},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+        except requests.RequestException:
+            # Transient network/connection blip — retry unless we're out of tries.
+            if is_last:
+                return Response(
+                    {"error": "Coach couldn't be reached. Try again in a bit."},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            time.sleep(COACH_RETRY_BACKOFF[min(attempt, len(COACH_RETRY_BACKOFF) - 1)])
+            continue
 
-    return Response({"reply": reply})
+        if resp.status_code == 429:
+            # Shared free-pool saturation — the one case retrying reliably helps.
+            if is_last:
+                return Response(
+                    {"error": "Coach is busy. Do another set and ask again."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            time.sleep(COACH_RETRY_BACKOFF[min(attempt, len(COACH_RETRY_BACKOFF) - 1)])
+            continue
+
+        if not resp.ok:
+            return Response(
+                {"error": "Coach couldn't be reached. Try again in a bit."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        try:
+            reply = resp.json()["choices"][0]["message"]["content"].strip()
+        except (ValueError, KeyError, IndexError, TypeError):
+            return Response(
+                {"error": "Coach couldn't be reached. Try again in a bit."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({"reply": reply})
 
 
 def get_object_or_404(model, **kwargs):

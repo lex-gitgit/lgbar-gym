@@ -847,21 +847,38 @@ class CoachApiTests(ApiTestCase):
         res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(res.status_code, 503)
 
+    @patch("gym.api_views.time.sleep")
     @patch("gym.api_views.requests.post")
-    def test_openrouter_rate_limit_returns_429(self, mock_post):
+    def test_openrouter_rate_limit_retries_then_returns_429(self, mock_post, mock_sleep):
         mock_post.return_value = _mock_openrouter_response(status_code=429)
         res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(res.status_code, 429)
+        self.assertEqual(mock_post.call_count, 3)  # exhausted all attempts
+
+    @patch("gym.api_views.time.sleep")
+    @patch("gym.api_views.requests.post")
+    def test_transient_429_then_success_recovers(self, mock_post, mock_sleep):
+        mock_post.side_effect = [
+            _mock_openrouter_response(status_code=429),
+            _mock_openrouter_response("Fine, here's your answer. Now go lift."),
+        ]
+        res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["reply"], "Fine, here's your answer. Now go lift.")
+        self.assertEqual(mock_post.call_count, 2)
 
     @patch("gym.api_views.requests.post")
-    def test_openrouter_server_error_returns_502(self, mock_post):
+    def test_openrouter_server_error_returns_502_no_retry(self, mock_post):
         mock_post.return_value = _mock_openrouter_response(status_code=500)
         res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(res.status_code, 502)
+        self.assertEqual(mock_post.call_count, 1)  # 5xx isn't retried
 
+    @patch("gym.api_views.time.sleep")
     @patch("gym.api_views.requests.post")
-    def test_openrouter_network_error_returns_502(self, mock_post):
+    def test_openrouter_network_error_retries_then_returns_502(self, mock_post, mock_sleep):
         import requests as requests_module
         mock_post.side_effect = requests_module.ConnectionError("boom")
         res = self.post_json(reverse("api_coach"), {"messages": [{"role": "user", "content": "hi"}]})
         self.assertEqual(res.status_code, 502)
+        self.assertEqual(mock_post.call_count, 3)
