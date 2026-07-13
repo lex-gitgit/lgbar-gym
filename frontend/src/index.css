@@ -297,6 +297,10 @@ a { color: inherit; text-decoration: none; }
 
 .main-content {
   flex: 1;
+  /* min-width: 0 — as a flex item, min-width defaults to auto, letting any
+     wide no-wrap content (e.g. the exercise picker's filter row) force the
+     whole page wider than the viewport on mobile. */
+  min-width: 0;
   margin-left: var(--sidebar-width);
   min-height: 100vh;
   transition: margin-left var(--transition);

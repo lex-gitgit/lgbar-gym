@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import ExercisePicker from "../components/ExercisePicker";
 
@@ -138,6 +138,9 @@ export default function DayCreate({ showFlash }) {
     <>
       <div className="page-header">
         <h1>Log Workout</h1>
+        <div className="flex gap-sm">
+          <Link to="/presets/new" className="btn btn-secondary btn-sm">+ New Preset</Link>
+        </div>
       </div>
 
       {presets.length > 0 && (
